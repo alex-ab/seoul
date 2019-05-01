@@ -324,6 +324,9 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	Logging::printf("SET FEATURES %x sc %x\n", _regs[0] >> 24, _regs[3] & 0xff);
 	complete_command();
 	break;
+      case 0xf5: // Security Freeze Lock - no-op
+	complete_command();
+	break;
       default:
 	Logging::panic("should execute command %x\n", _regs[0] >> 16);
       };
