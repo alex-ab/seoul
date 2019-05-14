@@ -44,12 +44,12 @@ size_t strlen(const char *src);
 char * strcpy(char *dst, const char *src);
 char * strstr(char const *haystack, char const *needle);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
-const char * strchr(const char *s, int c);
+char * strchr(const char *s, int c);
 
 int strcmp(const char *dst, const char *src);
 int strncmp(const char *dst, const char *src, size_t size);
-int strspn(const char *s, const char *accept);
-int strcspn(const char *s, const char *reject);
+size_t strspn(const char *s, const char *accept);
+size_t strcspn(const char *s, const char *reject);
 
 VMM_END_EXTERN_C
 
