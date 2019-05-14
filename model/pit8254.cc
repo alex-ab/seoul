@@ -360,9 +360,12 @@ class PitCounter : public StaticReceiver<PitCounter>
     : _modus(), _latch(), _new_counter(), _initial(), _latched_status(), _start(0), _bus_timer(nullptr), _bus_irq(0), _irq(0), _clock(0)
   { }
 
+  /**
+   * XXX hacky way to copy an object which contains pointers.
+   */
   PitCounter &operator = (PitCounter const &other)
   {
-    memcpy(this, &other, sizeof(*this));
+    memcpy((void*)this, &other, sizeof(*this));
     return *this;
   }
 
