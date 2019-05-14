@@ -196,55 +196,55 @@ public:
  *      pushal registers - 8 dwords
  *      es, ds, ss, cs - 2 words
  */
-asm volatile ("; .code16"
-	      "; start_vbios:"
-	      // build stack frame
-	      "; pushw %ss"
-	      "; pushw %cs"
-	      "; pushw %ds"
-	      "; pushw %es"
-	      "; pushal"
+asm ("; .code16"
+	 "; start_vbios:"
+	 // build stack frame
+	 "; pushw %ss"
+	 "; pushw %cs"
+	 "; pushw %ds"
+	 "; pushw %es"
+	 "; pushal"
 
-	      // make the registers accessible
-	      // we start with a copy-in from the stack
-	      "; movw %ss, %ax"
-	      "; movw %cs, %bx"
- 	      "; movl $" stringify(BIOS_SHMEM_BASE - BIOS_BASE) ", %edx"
-	      "; movw $52, %cs:0(%edx)"
-	      "; movw %ax, %cs:2(%edx)"
-	      "; movw %sp, %cs:4(%edx)"
-	      "; movw %bx, %cs:6(%edx)"
-	      "; movw $(" stringify(BIOS_SHMEM_BASE - BIOS_BASE + NUM_VCPU_PARAMETER*SIZEOF_VCPU_PARAMETER) "), %cs:8(%edx)"
+	 // make the registers accessible
+	 // we start with a copy-in from the stack
+	 "; movw %ss, %ax"
+	 "; movw %cs, %bx"
+ 	 "; movl $" stringify(BIOS_SHMEM_BASE - BIOS_BASE) ", %edx"
+	 "; movw $52, %cs:0(%edx)"
+	 "; movw %ax, %cs:2(%edx)"
+	 "; movw %sp, %cs:4(%edx)"
+	 "; movw %bx, %cs:6(%edx)"
+	 "; movw $(" stringify(BIOS_SHMEM_BASE - BIOS_BASE + NUM_VCPU_PARAMETER*SIZEOF_VCPU_PARAMETER) "), %cs:8(%edx)"
 
-	      // copy in/out loop
-	      "; 1:"
-	      "; mov %cs:0(%edx), %cx"
-	      "; test %cx, %cx"
-	      "; jz 2f"
-	      "; mov %cs:2(%edx), %ax"
-	      "; mov %cs:4(%edx), %si"
-	      "; mov %cs:6(%edx), %bx"
-	      "; mov %cs:8(%edx), %di"
-	      "; add $" stringify(SIZEOF_VCPU_PARAMETER) ", %dx"
-	      "; mov %ax, %ds"
-	      "; mov %bx, %es"
-	      "; rep movsb %ds:(%si), %es:(%di)"
-	      "; jmp 1b"
-	      "; 2:"
+	 // copy in/out loop
+	 "; 1:"
+	 "; mov %cs:0(%edx), %cx"
+	 "; test %cx, %cx"
+	 "; jz 2f"
+	 "; mov %cs:2(%edx), %ax"
+	 "; mov %cs:4(%edx), %si"
+	 "; mov %cs:6(%edx), %bx"
+	 "; mov %cs:8(%edx), %di"
+	 "; add $" stringify(SIZEOF_VCPU_PARAMETER) ", %dx"
+	 "; mov %ax, %ds"
+	 "; mov %bx, %es"
+	 "; rep movsb %ds:(%si), %es:(%di)"
+	 "; jmp 1b"
+	 "; 2:"
 
-	      // return back
-	      "; popal"
-	      "; pop %es"
-	      "; pop %ds"
-	      "; add $10, %esp"
-	      "; iret"
-	      "; end_vbios:"
+	 // return back
+	 "; popal"
+	 "; pop %es"
+	 "; pop %ds"
+	 "; add $10, %esp"
+	 "; iret"
+	 "; end_vbios:"
 #ifdef __x86_64__
-	      "; .code64"
+	 "; .code64"
 #else
-	      "; .code32"
+	 "; .code32"
 #endif
-	      );
+	);
 
 PARAM_HANDLER(vbios,
 	      "vbios - create a bridge between VCPU and the BIOS bus.")
