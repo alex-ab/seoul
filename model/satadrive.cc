@@ -258,7 +258,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
       case 0x24: // READ SECTOR EXT
       case 0x25: // READ DMA EXT
       case 0x29: // READ MULTIPLE EXT
-	lba48_command = true;
+	lba48_command = true; [[fallthrough]];
       case 0x20: // READ SECTOR
       case 0xc4: // READ MULTIPLE
       case 0xc8: // READ DMA
@@ -271,7 +271,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
       case 0x34: // WRITE SECTOR EXT
       case 0x35: // WRITE DMA EXT
       case 0x39: // WRITE MULTIPLE EXT
-	lba48_command = true;
+	lba48_command = true; [[fallthrough]];
       case 0x30: // WRITE SECTOR
       case 0xc5: // WRITE MULITIPLE
       case 0xca: // WRITE DMA
@@ -283,6 +283,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	break;
       case 0x60: // READ  FPDMA QUEUED
 	read = true;
+	[[fallthrough]];
       case 0x61: // WRITE FPDMA QUEUED
 	{
 	  // some idiot has switched feature and sector count regs in this case!

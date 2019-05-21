@@ -247,10 +247,10 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	  {
 	  case 0x3: _regs.bnry = value;   break;
 	  case 0x7: _regs.isr &= ~value | 0x80; break;
-	  case 0xd: value &= 0x1f;
-	  case 0xc: value &= 0x3f;
+	  case 0xd: value &= 0x1f; [[fallthrough]];
+	  case 0xc: value &= 0x3f; [[fallthrough]];
 	  case 0xe:
-	  case 0xf: value &= 0x7f;
+	  case 0xf: value &= 0x7f; [[fallthrough]];
 	  case 0x1:
 	  case 0x2:
 	  case 0x4 ... 0x6:

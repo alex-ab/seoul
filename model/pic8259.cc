@@ -314,6 +314,9 @@ class PicDevice : public StaticReceiver<PicDevice>
 		  _icw[ICW3] = msg.value;
 		  break;
 		}
+
+	      [[fallthrough]];
+
 	    case ICW4:
 	      _icw_mode = OCW1;
 	      if (_icw[ICW1] & ICW1_IC4)
@@ -321,6 +324,9 @@ class PicDevice : public StaticReceiver<PicDevice>
 		  _icw[ICW4] = msg.value;
 		  break;
 		}
+
+	      [[fallthrough]];
+
 	    case OCW1:
 	      _imr = msg.value;
 	      propagate_irq(true);

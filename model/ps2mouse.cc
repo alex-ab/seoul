@@ -208,6 +208,9 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 		packet = msg.value << 8 | 1;
 		break;
 	      }
+
+	    [[fallthrough]];
+
 	  default:
 	  case PARAM_NONE:
 	    packet = 0xfa01;
@@ -264,6 +267,9 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 		break;
 	      default:
 		Logging::printf("%s(%x, %x) unknown command\n", __PRETTY_FUNCTION__, msg.port, msg.value);
+
+		[[fallthrough]];
+
 	      case 0xe1: // read secondary ID - used to identify trackpoints
 		packet = 0xfc01;
 	      }

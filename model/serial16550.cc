@@ -223,6 +223,9 @@ public:
 	  msg.value &= _rfcount ? 0x1e : 0x2;
 	else
 	  msg.value &= 0x1f;
+
+	[[fallthrough]];
+
       case SCR ... DLM:
 	_regs[offset] = msg.value;
 	break;

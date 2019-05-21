@@ -925,7 +925,8 @@ public:
       } else {
 	// If _txpoll_us is zero, we don't map TX registers and don't
 	// need to poll.
-	// FALLTHROUGH
+
+	[[fallthrough]];
       }
     default:
       return false;

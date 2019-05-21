@@ -268,6 +268,9 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	  {
 	  case 0xf0: // set scanset
 	    _pwrite = _pread = 0;
+
+	    [[fallthrough]];
+
 	  case 0xed: // set indicators
 	  case 0xf3: // set typematic rate/delay
 	  case 0xfb: // set key type typematic
@@ -313,6 +316,9 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	      {
 	      case 0xed: // set indicators
 		_indicators = msg.value;
+
+		[[fallthrough]];
+
 	      case 0xf3: // set typematic rate/delay
 		command = 0;
 		break;
@@ -337,6 +343,9 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 		  _no_breakcode[msg.value >> 3] &= ~(1 << (msg.value & 7));
 		else
 		  _no_breakcode[msg.value >> 3] |= 1 << (msg.value & 7);
+
+		[[fallthrough]];
+
 	      case 0xfb: // set key type typematic
 		if (msg.value)
 		  command = _last_command;
