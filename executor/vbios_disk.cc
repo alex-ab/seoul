@@ -225,7 +225,7 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 	    params.sectorsize = 512;
         msg.vcpu->copy_out(msg.cpu->ds.base + msg.cpu->si, &params, params.size);
 	    msg.cpu->ah = 0; // function supported
-	    Logging::printf("VB: driveparam[%d] size %x sectors %llx efl %x eax %x\n", disk_nr, params.size, params.sectors, msg.cpu->efl, msg.cpu->eax);
+	    //Logging::printf("VB: driveparam[%d] size %x sectors %llx efl %x eax %x\n", disk_nr, params.size, params.sectors, msg.cpu->efl, msg.cpu->eax);
 	    //msg.cpu->head.res1 = 0x100;
 	  }
 	break;
