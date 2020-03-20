@@ -105,6 +105,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       assert(msg.mtr_in & MTD_SYSENTER);
       msg.cpu->edx_eax((&msg.cpu->sysenter_cs)[msg.cpu->ecx - 0x174]);
       break;
+    case 0x179: /* MCG CAP */
     case 0x8b: // microcode
       // MTRRs
     case 0xfe:
