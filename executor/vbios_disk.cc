@@ -40,6 +40,7 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
   unsigned _timer { 0 };
   DiskParameter _disk_params[MAX_DISKS];
   unsigned _disk_count { ~0U };
+  unsigned short _disk_boot;
 
   bool _diskop_inprogress;
 
@@ -93,12 +94,12 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 
   bool boot_from_disk(MessageBios &msg)
   {
-    Logging::printf("boot from disk\n");
+    Logging::printf("boot from disk %d\n", _disk_boot);
     msg.cpu->ah      = 0;    // We use this for error reporting.
     msg.cpu->ss.sel  = 0;
     msg.cpu->ss.base = 0;
     msg.cpu->esp     = 0x7000;
-    msg.cpu->edx     = 0x80; // booting from first disk
+    msg.cpu->edx     = 0x80 + _disk_boot;
 
     msg.cpu->cs.sel  = 0;
     msg.cpu->cs.base = 0;
@@ -110,7 +111,7 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
     msg.cpu->esp -= sizeof(frame);
     msg.vcpu->copy_out(msg.cpu->esp, frame, sizeof(frame));
 
-    if (!disk_op(msg, 0, 0, 0x7c00, 1, false) or (msg.cpu->ah != 0))
+    if (!disk_op(msg, _disk_boot, 0, 0x7c00, 1, false) or (msg.cpu->ah != 0))
       Logging::panic("VB: could not read MBR from boot disk");
     msg.mtr_out |= MTD_CS_SS | MTD_RIP_LEN | MTD_RSP | MTD_RFLAGS | MTD_GPR_ACDB;
     return true;
@@ -304,7 +305,9 @@ public:
   }
 
 
-  VirtualBiosDisk(Motherboard &mb) : BiosCommon(mb), _disk_params(), _diskop_inprogress() {
+  VirtualBiosDisk(Motherboard &mb, unsigned short const disk_boot)
+  : BiosCommon(mb), _disk_params(), _disk_boot(disk_boot), _diskop_inprogress()
+  {
     mb.bus_diskcommit.add(this,  VirtualBiosDisk::receive_static<MessageDiskCommit>);
     mb.bus_timeout.add(this,     VirtualBiosDisk::receive_static<MessageTimeout>);
 
@@ -320,8 +323,10 @@ public:
 };
 
 PARAM_HANDLER(vbios_disk,
-	      "vbios_disk- provide disk related virtual BIOS functions.")
+	      "vbios_disk:boot_disknr - provide disk related virtual BIOS functions.",
+	      "Example: 'vbios_disk:0'")
 {
-  mb.bus_bios.add(new VirtualBiosDisk(mb), VirtualBiosDisk::receive_static<MessageBios>);
+  unsigned short const disk_nr = (argv[0] == ~0UL) ? 0 : argv[0];
+  mb.bus_bios.add(new VirtualBiosDisk(mb, disk_nr), VirtualBiosDisk::receive_static<MessageBios>);
 }
 
