@@ -1,0 +1,57 @@
+diff -ur unmodified/qemu-4.2.1/target/i386/excp_helper.c qemu-4.2.1/target/i386/excp_helper.c
+--- unmodified/qemu-4.2.1/target/i386/excp_helper.c	2020-06-25 20:12:17.000000000 +0200
++++ qemu-4.2.1/target/i386/excp_helper.c	2020-06-27 11:26:17.134476344 +0200
+@@ -262,8 +262,8 @@
+         }
+         ptep = pde | PG_NX_MASK;
+ 
+-        /* if PSE bit is set, then we use a 4MB page */
+-        if ((pde & PG_PSE_MASK) && (env->cr[4] & CR4_PSE_MASK)) {
++        /* if host cr4 PSE bit is set, then we use a 4MB page */
++        if ((pde & PG_PSE_MASK) && (env->nested_pg_mode & SVM_NPT_PSE)) {
+             page_size = 4096 * 1024;
+             pte_addr = pde_addr;
+ 
+diff -ur unmodified/qemu-4.2.1/target/i386/svm.h qemu-4.2.1/target/i386/svm.h
+--- unmodified/qemu-4.2.1/target/i386/svm.h	2020-06-25 20:12:17.000000000 +0200
++++ qemu-4.2.1/target/i386/svm.h	2020-06-27 11:01:32.088877512 +0200
+@@ -135,6 +135,7 @@
+ #define SVM_NPT_PAE         (1 << 0)
+ #define SVM_NPT_LMA         (1 << 1)
+ #define SVM_NPT_NXE         (1 << 2)
++#define SVM_NPT_PSE         (1 << 3)
+ 
+ #define SVM_NPTEXIT_P       (1ULL << 0)
+ #define SVM_NPTEXIT_RW      (1ULL << 1)
+diff -ur unmodified/qemu-4.2.1/target/i386/svm_helper.c qemu-4.2.1/target/i386/svm_helper.c
+--- unmodified/qemu-4.2.1/target/i386/svm_helper.c	2020-06-25 20:12:17.000000000 +0200
++++ qemu-4.2.1/target/i386/svm_helper.c	2020-06-27 11:28:24.658270146 +0200
+@@ -209,16 +209,21 @@
+ 
+     nested_ctl = x86_ldq_phys(cs, env->vm_vmcb + offsetof(struct vmcb,
+                                                           control.nested_ctl));
++
++    env->nested_pg_mode = 0;
++
+     if (nested_ctl & SVM_NPT_ENABLED) {
+         env->nested_cr3 = x86_ldq_phys(cs,
+                                 env->vm_vmcb + offsetof(struct vmcb,
+                                                         control.nested_cr3));
+         env->hflags2 |= HF2_NPT_MASK;
+ 
+-        env->nested_pg_mode = 0;
+         if (env->cr[4] & CR4_PAE_MASK) {
+             env->nested_pg_mode |= SVM_NPT_PAE;
+         }
++        if (env->cr[4] & CR4_PSE_MASK) {
++            env->nested_pg_mode |= SVM_NPT_PSE;
++        }
+         if (env->hflags & HF_LMA_MASK) {
+             env->nested_pg_mode |= SVM_NPT_LMA;
+         }
+Only in qemu-4.2.1/target/i386: trace.c
+Only in qemu-4.2.1/target/i386: trace.c-timestamp
+Only in qemu-4.2.1/target/i386: trace.d
+Only in qemu-4.2.1/target/i386: trace.h
+Only in qemu-4.2.1/target/i386: trace.h-timestamp
+Only in qemu-4.2.1/target/i386: trace.o
