@@ -21,14 +21,12 @@
 
 struct Screen
 {
-  static void vga_updated();
-
   /**
    * Put a single char to the VGA monitor.
    */
-  static void vga_putc(long value, unsigned short *base, unsigned &pos)
+  static bool vga_putc(long value, unsigned short *base, unsigned &pos)
   {
-    if (value < 0) return;
+    if (value < 0) return false;
     bool visible = false;
     switch (value & 0xff)
       {
@@ -57,8 +55,6 @@ struct Screen
       for (unsigned i = 0; i < 80; i++) base[pos + i] = 0x0700;
     }
     if (visible) base[pos++] =  value;
-
-    if (scroll || visible)
-      vga_updated();
+    return scroll || visible;
   }
 };
