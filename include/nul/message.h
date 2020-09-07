@@ -405,7 +405,9 @@ struct MessageConsole
       // the user requests to kill a PD
       TYPE_KILL,
       // the user requests a debug feature
-      TYPE_DEBUG
+      TYPE_DEBUG,
+      // content of vga/framebuffer changed by model
+      TYPE_CONTENT_UPDATE,
     } type;
   unsigned short id;
   unsigned short view;

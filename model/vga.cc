@@ -56,9 +56,16 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
 
   void puts_guest(const char *msg) {
     unsigned pos = _regs.cursor_pos - TEXT_OFFSET;
+
+    bool update = false;
     for (size_t i=0; msg[i]; i++)
-      Screen::vga_putc(0x0f00 | msg[i], reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET, pos);
+      update = update || Screen::vga_putc(0x0f00 | msg[i], reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET, pos);
     update_cursor(0, ((pos / 80) << 8) | (pos % 80));
+
+    if (update) {
+        MessageConsole msg2(MessageConsole::TYPE_CONTENT_UPDATE);
+        _mb.bus_console.send(msg2);
+    }
   }
 
 
@@ -254,6 +261,9 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
 		base[row*80 + col] = cpu->bh << 8;
 	      else
 		base[row*80 + col] = base[(row + rows)*80 + col];
+
+	  MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+	  _mb.bus_console.send(msg);
 	}
 	break;
       case 0x08: // read character attributes
@@ -275,6 +285,9 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
 	    if (offset < 0x800*8) {
 		if (cpu->ah & 1) framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 1] = cpu->bl;
 		framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 0] = cpu->al;
+
+		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+		_mb.bus_console.send(msg);
 	    }
 	  }
 	}
@@ -286,8 +299,13 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
 	  unsigned value = ((framebuffer_ptr()[2*(TEXT_OFFSET + page + pos) + 1] & 0xff) << 8);
 
 	  value |= cpu->al;
-	  Screen::vga_putc(value, reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET + page, pos);
+	  bool const update = Screen::vga_putc(value, reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET + page, pos);
 	  update_cursor(cpu->bh, ((pos / 80) << 8) | (pos % 80));
+
+	  if (update) {
+		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+		_mb.bus_console.send(msg);
+	  }
 	}
 	break;
       case 0x0f: // get video mode
