@@ -101,6 +101,7 @@ struct Utcb
       mword        : 64;          // reserved (efer)
       mword        : 64;          // reserved (star)
       mword        : 64;          // reserved (lstar)
+      mword        : 64;          // reserved (cstar)
       mword        : 64;          // reserved (fmask)
       mword        : 64;          // reserved (kernel_gs_base)
       uint32       : 32;          // reserved (tpr)
