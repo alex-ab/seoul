@@ -230,7 +230,7 @@ helper_LOOPS(JECXZ, 3)
   void __attribute__((regparm(3)))					\
   helper_##NAME()							\
     {									\
-    void *addr;								\
+    void *addr = nullptr;						\
     if (!modrm2mem(addr, 6, user_access(TYPE_R)))		\
       {									\
 	unsigned base;							\
@@ -254,7 +254,7 @@ helper_LDT(LGDT, gd, MTD_GDTR)
   helper_##NAME()							\
   {									\
     _mtr_in |= MTD;							\
-    void *addr;								\
+    void *addr = nullptr;						\
     if (!modrm2mem(addr, 6, user_access(TYPE_W)))			\
       {									\
 	unsigned base = _cpu->VAR.base;					\
@@ -486,7 +486,7 @@ int load_gdt_descriptor(Descriptor &desc, unsigned short selector, bool ext) {
   if (!(selector & ~0x3)) GP(ext);
   memset(desc.values, 0, sizeof(desc.values));
   unsigned long base;
-  void *res;
+  void *res = nullptr;
   if (!desc_get_base(selector, base, ext) && !prepare_virtual(base, 8, MemTlb::TYPE_R, res))
     memcpy(desc.values, res, 8);
   return _fault;

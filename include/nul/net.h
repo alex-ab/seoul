@@ -86,6 +86,7 @@ struct VMM_ALIGNED(16)  tx_desc {
   uint16 iplen()  const { return rawd[0] & 0x1FF; }
   uint8  maclen() const { return (rawd[0] >> 9) & 0x7F; }
 
+  constexpr tx_desc& operator=(const tx_desc&) = default;
 };
 
 static_assert(sizeof(tx_desc) == 16, "tx_desc must be 16-byte long");

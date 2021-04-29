@@ -359,7 +359,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   /**
    * Receive a FIS from the controller.
    */
-  void receive_fis(size_t fislen, unsigned *fis)
+  void receive_fis(size_t fislen, unsigned *fis) override
   {
     if (fislen >= 2)
       switch (fis[0] & 0xff)

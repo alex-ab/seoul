@@ -68,7 +68,7 @@ public:
   /**
    * Receive a FIS from the Device.
    */
-  void receive_fis(size_t fislen, unsigned *fis)
+  void receive_fis(size_t fislen, unsigned *fis) override
   {
     size_t copy_offset;
 
@@ -184,7 +184,7 @@ public:
 	  // XXX check for busy bit
 	  if (value & ~_inprogress & (1 << slot))
 	    {
-	      if (!PxTFD & 0x80)  break;
+	      if (!(PxTFD & 0x80))  break;
 	      _inprogress |= 1 << slot;
 
 	      unsigned  cl[4];
@@ -331,7 +331,7 @@ class AhciController : public ParentIrqProvider,
 
  public:
 
-  void trigger_irq (void * child) {
+  void trigger_irq (void * child) override {
     unsigned index = reinterpret_cast<AhciPort *>(child) - _ports;
     if (~REG_IS & (1 << index))
       {

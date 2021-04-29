@@ -61,7 +61,7 @@ class VirtualBiosReset : public StaticReceiver<VirtualBiosReset>, public BiosCom
     bool     acpi_table;
     Resource() : name(nullptr), offset(0), length(0), acpi_table(false) {}
     Resource(const char *_name, size_t _offset, size_t _length, bool _acpi_table) : name(_name), offset(_offset), length(_length), acpi_table(_acpi_table)  {}
-  } _resources[MAX_RESOURCES];
+  } _resources[MAX_RESOURCES] = { };
 
 
 
@@ -136,8 +136,6 @@ class VirtualBiosReset : public StaticReceiver<VirtualBiosReset>, public BiosCom
 
 
     // INIT resources
-    memset(_resources, 0, sizeof(_resources));
-
     MessageMemRegion msg3(0);
     check1(false, !_mb.bus_memregion.send(msg3) || !msg3.ptr || !msg3.count, "no low memory available");
 

@@ -69,7 +69,7 @@ public:
     if (~msg.mtr_out & MTD_RIP_LEN  && ~msg.mtr_out & MTD_CS_SS) {
       if (cpu->v86()) {
 	// jmp to IRET at the end of the VBIOS code
-	cpu->eip = BIOS_CODE_OFFSET + &end_vbios - &start_vbios - 1;
+	cpu->eip = BIOS_CODE_OFFSET + uintptr_t(&end_vbios) - uintptr_t(&start_vbios) - 1;
 	msg.mtr_out |= MTD_RIP_LEN;
       }
       else {

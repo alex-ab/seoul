@@ -138,7 +138,7 @@ private:
     uint8 packet_buf[64 * 1024];
     unsigned packet_cur { 0 };
 
-    void reset()
+    void reset() override
     {
       memset(const_cast<uint32 *>(regs), 0, 0x100);
       regs[TXDCTL] = (n == 0) ? (1<<25) : 0;
@@ -491,7 +491,7 @@ private:
       RXDCTL = 0x828/4,
     };
 
-    void reset()
+    void reset() override
     {
       memset(const_cast<uint32 *>(regs), 0, 0x100);
       regs[RXDCTL] = 1<<16 | ((n == 0) ? (1<<25) : 0);
