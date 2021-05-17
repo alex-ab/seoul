@@ -184,7 +184,9 @@ public:
 	  // XXX check for busy bit
 	  if (value & ~_inprogress & (1 << slot))
 	    {
-	      if (!(PxTFD & 0x80))  break;
+	      enum { TFD_BUSY = 0x80 };
+	      if (PxTFD & TFD_BUSY) break;
+
 	      _inprogress |= 1 << slot;
 
 	      unsigned  cl[4];
@@ -201,7 +203,7 @@ public:
 	      _drive->receive_fis(7, dsf);
 
 	      // set BSY
-	      PxTFD |= 0x80;
+	      PxTFD |= TFD_BUSY;
 	      _drive->receive_fis(clflags & 0x1f, ct);
 	    }
 	}
