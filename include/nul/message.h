@@ -436,6 +436,12 @@ struct MessageConsole
       unsigned res;
       char const * cmdline;
     };
+    struct {
+      unsigned x;
+      unsigned y;
+      unsigned width;
+      unsigned height;
+    };
   };
   MessageConsole(Type _type = TYPE_ALLOC_CLIENT, unsigned short _id=0) : type(_type), id(_id), view(0), ptr(0) {}
   MessageConsole(unsigned _index, ConsoleModeInfo *_info) : type(TYPE_GET_MODEINFO), id(0), view(0), index(_index), info(_info) {}
