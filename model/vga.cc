@@ -617,7 +617,7 @@ public:
 
 
     // alloc console
-    MessageConsole msg("VM", framebuffer_ptr(), _framebuffer_size, &_regs);
+    MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, 0, "VM", framebuffer_ptr(), _framebuffer_size, &_regs);
     if (!mb.bus_console.send(msg))
       Logging::panic("could not alloc a VGA backend");
     _view = msg.view;

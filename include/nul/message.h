@@ -445,8 +445,8 @@ struct MessageConsole
   };
   MessageConsole(Type _type = TYPE_ALLOC_CLIENT, unsigned short _id=0) : type(_type), id(_id), view(0), ptr(0) {}
   MessageConsole(unsigned _index, ConsoleModeInfo *_info) : type(TYPE_GET_MODEINFO), id(0), view(0), index(_index), info(_info) {}
-  MessageConsole(const char *_name, char * _ptr, size_t _size, VgaRegs *_regs)
-    : type(TYPE_ALLOC_VIEW), id(~0), view(0), name(_name), ptr(_ptr), size(_size), regs(_regs) {}
+  MessageConsole(Type _type, unsigned short _id, const char *_name, char * _ptr, size_t _size, VgaRegs *_regs)
+    : type(_type), id(_id), view(0), name(_name), ptr(_ptr), size(_size), regs(_regs) {}
   MessageConsole(unsigned short _id, unsigned short _view, unsigned _input_device, unsigned _input_data)
     : type(TYPE_KEY), id(_id), view(_view), input_device(_input_device), input_data(_input_data) {}
 };
