@@ -86,8 +86,10 @@ private:
   unsigned _txpoll_us;
 
   // Map RX registers?
-  bool _map_rx;
   unsigned _bdf;
+  bool _map_rx;
+
+  bool const _verbose;
 
   // Filtering
   const bool _promisc_default;
@@ -758,8 +760,10 @@ private:
         break;
       case VF_SET_MULTICAST: {
         uint8 count = (rVFMBX0 >> 16) & 0xFF;
-        Logging::printf("VF_SET_MULTICAST %08x (%u) %08x\n",
-                        rVFMBX0, count, rVFMBX1);
+
+        if (_verbose)
+          Logging::printf("VF_SET_MULTICAST %08x (%u) %08x\n",
+                          rVFMBX0, count, rVFMBX1);
 
         // Linux never sends more than 30 hashes.
         if (count > 30) count = 30;
@@ -1042,13 +1046,14 @@ public:
 	       uint32 mem_mmio, uint32 * local_rx_regs,
 	       uint32 mem_msix,
 	       unsigned txpoll_us, bool map_rx, unsigned bdf,
-	       bool promisc_default)
+	       bool promisc_default, bool verbose)
     : _mac(mac), _net(net), _bus_memregion(bus_memregion), _bus_mem(bus_mem),
       _clock(clock), _timer(timer),
       _mem_mmio(mem_mmio), _mem_msix(mem_msix),
       _local_rx_regs(local_rx_regs), _local_tx_regs(_local_rx_regs + 1024),
-      _txpoll_us(txpoll_us), _map_rx(map_rx), _bdf(bdf),
-      _promisc_default(promisc_default), _ip_address(0), _guest_uses_mac(0),
+      _txpoll_us(txpoll_us), _bdf(bdf), _map_rx(map_rx),
+      _verbose(verbose), _promisc_default(promisc_default),
+      _ip_address(0), _guest_uses_mac(0),
       processed(false)
   {
     Logging::printf("Attached 82576VF model at %08x+0x4000, %08x+0x1000\n",
@@ -1073,7 +1078,7 @@ public:
 };
 
 PARAM_HANDLER(intel82576vf,
-	      "intel82576vf:[promisc][,mem_mmio][,mem_msix][,txpoll_us][,rx_map] - attach an Intel 82576VF to the PCI bus.",
+	      "intel82576vf:[promisc][,mem_mmio][,mem_msix][,txpoll_us][,rx_map][,verbose] - attach an Intel 82576VF to the PCI bus.",
 	      "promisc   - if !=0, be always promiscuous (use for Linux VMs that need it for bridging) (Default 1)",
 	      "txpoll_us - if !=0, map TX registers to guest and poll them every txpoll_us microseconds. (Default 0)",
 	      "rx_map    - if !=0, map RX registers to guest. (Default: Yes)",
@@ -1097,7 +1102,8 @@ PARAM_HANDLER(intel82576vf,
 				       (argv[3] == ~0UL) ? 0 : argv[3],
 				       argv[4],
 				       PciHelper::find_free_bdf(mb.bus_pcicfg, ~0U),
-				       (argv[0] == ~0UL) ? true : (argv[0] != 0) );
+				       (argv[0] == ~0UL) ? true : (argv[0] != 0),
+				       ~argv[5] ? true : (argv[0] != 0));
   mb.bus_mem.add(dev, &Model82576vf::receive_static<MessageMem>);
   mb.bus_memregion.add(dev, &Model82576vf::receive_static<MessageMemRegion>);
   mb.bus_pcicfg.  add(dev, &Model82576vf::receive_static<MessagePciConfig>);

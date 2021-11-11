@@ -119,7 +119,7 @@ public:
 	assert(fislen == 5);
 	copy_offset = 0x20;
 
-	Logging::printf("PIO setup fis\n");
+//	Logging::printf("PIO setup fis\n");
 	if (PxIE & 0x2)
 		PxIS |= 1 << 1U;
 	break;
