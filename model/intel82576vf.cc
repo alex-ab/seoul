@@ -86,8 +86,10 @@ private:
   unsigned _txpoll_us;
 
   // Map RX registers?
-  bool _map_rx;
   unsigned _bdf;
+  bool _map_rx;
+
+  bool const _verbose;
 
   // Filtering
   const bool _promisc_default;
@@ -152,13 +154,14 @@ private:
       regs[TDH]   = 0;
     }
 
-    void txdctl_poll()
+    void txdctl_poll(bool const verbose)
     {
       uint32 txdctl_new = regs[TXDCTL];
       if (((txdctl_old ^ txdctl_new) & (1<<25)) != 0) {
-	// Enable/Disable receive queue
-	Logging::printf("TX queue %u: %s\n", n,
-			((txdctl_new & (1<<25)) != 0) ? "ENABLED" : "DISABLED");
+        // Enable/Disable receive queue
+        if (verbose)
+          Logging::printf("TX queue %u: %s\n", n,
+                          ((txdctl_new & (1<<25)) != 0) ? "ENABLED" : "DISABLED");
       }
       regs[TXDCTL] &= ~(1<<26);	// Clear SWFLUSH
       txdctl_old = txdctl_new;
@@ -446,12 +449,12 @@ private:
       return regs[(offset & 0x8FF)/4];
     }
 
-    void write(uint32 offset, uint32 val)
+    void write(uint32 offset, uint32 val, bool const verbose)
     {
       // Logging::printf("TX write %x (%x) <- %x\n", offset, (offset & 0x8FF) / 4, val);
       unsigned i = (offset & 0x8FF) / 4;
       regs[i] = val;
-      if (i == TXDCTL) txdctl_poll();
+      if (i == TXDCTL) txdctl_poll(verbose);
       if (i == TDT) tdt_poll();
       
     }
@@ -745,7 +748,8 @@ private:
 	rVFMBX0 |= CMD_ACK;
 	rVFMBX1 = _mac.raw;
 	rVFMBX2 = (_mac.raw >> 32) & 0xFFFF;
-	Logging::printf("VF_RESET " MAC_FMT "\n", MAC_SPLIT(&_mac));
+	if (_verbose)
+		Logging::printf("VF_RESET " MAC_FMT "\n", MAC_SPLIT(&_mac));
 	break;
       case VF_SET_MAC_ADDR:
         rVFMBX0 |= CMD_ACK | CTS;
@@ -754,12 +758,15 @@ private:
           break;
 
         _mac.raw = static_cast<uint64>(rVFMBX2 & 0xFFFF) << 32 | rVFMBX1;
-        Logging::printf("VF_SET_MAC " MAC_FMT "\n", MAC_SPLIT(&_mac));
+        if (_verbose)
+          Logging::printf("VF_SET_MAC " MAC_FMT "\n", MAC_SPLIT(&_mac));
         break;
       case VF_SET_MULTICAST: {
         uint8 count = (rVFMBX0 >> 16) & 0xFF;
-        Logging::printf("VF_SET_MULTICAST %08x (%u) %08x\n",
-                        rVFMBX0, count, rVFMBX1);
+
+        if (_verbose)
+          Logging::printf("VF_SET_MULTICAST %08x (%u) %08x\n",
+                          rVFMBX0, count, rVFMBX1);
 
         // Linux never sends more than 30 hashes.
         if (count > 30) count = 30;
@@ -874,7 +881,7 @@ public:
       //Logging::printf("MMIO WRITE %lx\n", offset);
       switch (offset >> 12) {
       case 2: _rx_queues[(offset & 0x100) ? 1 : 0].write(offset, *msg.ptr); break;
-      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(offset, *msg.ptr); break;
+      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(offset, *msg.ptr, _verbose); break;
       default: MMIO_write(msg.phys - (rPCIBAR0 & ~0x3FFF), *msg.ptr); break;
       }
     } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
@@ -932,7 +939,8 @@ public:
       return false;
     }
 
-    Logging::printf("82576VF MAP %lx+%x from %p\n", msg.page, msg.count, msg.ptr);
+    if (_verbose)
+      Logging::printf("82576VF MAP %lx+%x from %p\n", msg.page, msg.count, msg.ptr);
     return true;
   }
 
@@ -941,7 +949,7 @@ public:
     if (msg.nr != _timer_nr) return false;
 
     for (unsigned i = 0; i < 2; i++) {
-      _tx_queues[i].txdctl_poll();
+      _tx_queues[i].txdctl_poll(_verbose);
       _tx_queues[i].tdt_poll();
     }
 
@@ -1042,13 +1050,14 @@ public:
 	       uint32 mem_mmio, uint32 * local_rx_regs,
 	       uint32 mem_msix,
 	       unsigned txpoll_us, bool map_rx, unsigned bdf,
-	       bool promisc_default)
+	       bool promisc_default, bool verbose)
     : _mac(mac), _net(net), _bus_memregion(bus_memregion), _bus_mem(bus_mem),
       _clock(clock), _timer(timer),
       _mem_mmio(mem_mmio), _mem_msix(mem_msix),
       _local_rx_regs(local_rx_regs), _local_tx_regs(_local_rx_regs + 1024),
-      _txpoll_us(txpoll_us), _map_rx(map_rx), _bdf(bdf),
-      _promisc_default(promisc_default), _ip_address(0), _guest_uses_mac(0),
+      _txpoll_us(txpoll_us), _bdf(bdf), _map_rx(map_rx),
+      _verbose(verbose), _promisc_default(promisc_default),
+      _ip_address(0), _guest_uses_mac(0),
       processed(false)
   {
     Logging::printf("Attached 82576VF model at %08x+0x4000, %08x+0x1000\n",
@@ -1073,7 +1082,7 @@ public:
 };
 
 PARAM_HANDLER(intel82576vf,
-	      "intel82576vf:[promisc][,mem_mmio][,mem_msix][,txpoll_us][,rx_map] - attach an Intel 82576VF to the PCI bus.",
+	      "intel82576vf:[promisc][,mem_mmio][,mem_msix][,txpoll_us][,rx_map][,verbose] - attach an Intel 82576VF to the PCI bus.",
 	      "promisc   - if !=0, be always promiscuous (use for Linux VMs that need it for bridging) (Default 1)",
 	      "txpoll_us - if !=0, map TX registers to guest and poll them every txpoll_us microseconds. (Default 0)",
 	      "rx_map    - if !=0, map RX registers to guest. (Default: Yes)",
@@ -1093,11 +1102,12 @@ PARAM_HANDLER(intel82576vf,
 				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
 				       mb.clock(), mb.bus_timer,
 				       mem_mmio, reinterpret_cast<uint32 *>(msg_mmio.ptr),
-				       (argv[2] == ~0UL) ? 0xF7CC0000 : argv[2],
-				       (argv[3] == ~0UL) ? 0 : argv[3],
+				       (argv[2] == ~0UL) ? 0xF7CC0000UL : argv[2],
+				       (argv[3] == ~0UL) ? 0UL : argv[3],
 				       argv[4],
 				       PciHelper::find_free_bdf(mb.bus_pcicfg, ~0U),
-				       (argv[0] == ~0UL) ? true : (argv[0] != 0) );
+				       (argv[0] == ~0UL) ? true  : (argv[0] != 0UL),
+				       (argv[5] == ~0UL) ? false : (argv[5] != 0UL));
   mb.bus_mem.add(dev, &Model82576vf::receive_static<MessageMem>);
   mb.bus_memregion.add(dev, &Model82576vf::receive_static<MessageMemRegion>);
   mb.bus_pcicfg.  add(dev, &Model82576vf::receive_static<MessagePciConfig>);

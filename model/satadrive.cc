@@ -43,6 +43,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   unsigned _dsf[7];
   unsigned _splits[33];
   DiskParameter _params;
+  bool const _verbose;
   static unsigned const DMA_DESCRIPTORS = 64;
   DmaDescriptor _dma[DMA_DESCRIPTORS];
 
@@ -133,7 +134,8 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   {
     if (!_dsf[3]) return 0;
     uintptr_t prdbase = union64(_dsf[2], _dsf[1]);
-    Logging::printf("push data %zx prdbase %zx _dsf %x %x %x\n", length, size_t(prdbase), _dsf[1], _dsf[2], _dsf[3]);
+    if (_verbose)
+      Logging::printf("ahci: push data %zx prdbase %zx _dsf %x %x %x\n", length, size_t(prdbase), _dsf[1], _dsf[2], _dsf[3]);
     size_t prd = 0;
     size_t offset = 0;
     while (offset < length && prd < _dsf[3])
@@ -301,14 +303,15 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	complete_command();
 	break;
       case 0xe0: // STANDBY IMMEDIATE
-	Logging::printf("STANDBY IMMEDIATE\n");
+	Logging::printf("ahci: STANDBY IMMEDIATE\n");
 	_error |= 4;
 	_status |= 1;
 	complete_command();
 	break;
       case 0xec: // IDENTIFY
 	{
-	  Logging::printf("IDENTIFY\n");
+	  if (_verbose)
+	    Logging::printf("ahci: IDENTIFY\n");
 
 	  // start pio command
 	  send_pio_setup_fis(512);
@@ -317,12 +320,16 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	  build_identify_buffer(identify);
 	  bool irq = false;
 	  push_data(512, identify, irq);
-	  Logging::printf("IDENTIFY transfered\n");
+
+	  if (_verbose)
+	    Logging::printf("ahci: IDENTIFY transferred\n");
+
 	  complete_command();
 	};
 	break;
       case 0xef: // SET FEATURES
-	Logging::printf("SET FEATURES %x sc %x\n", _regs[0] >> 24, _regs[3] & 0xff);
+	if (_verbose)
+	  Logging::printf("ahci: SET FEATURES %x sc %x\n", _regs[0] >> 24, _regs[3] & 0xff);
 	complete_command();
 	break;
       case 0xf5: // Security Freeze Lock - no-op
@@ -414,15 +421,15 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   }
 
 
-  SataDrive(DBus<MessageDisk> &bus_disk, DBus<MessageMemRegion> *bus_memregion, DBus<MessageMem> *bus_mem, unsigned hostdisk, DiskParameter params)
-    : _bus_memregion(bus_memregion), _bus_mem(bus_mem), _bus_disk(bus_disk), _hostdisk(hostdisk), _multiple(0), _regs(), _ctrl(0), _status(), _error(), _dsf(), _splits(), _params(params), _dma()
+  SataDrive(DBus<MessageDisk> &bus_disk, DBus<MessageMemRegion> *bus_memregion, DBus<MessageMem> *bus_mem, unsigned hostdisk, DiskParameter params, bool verbose)
+    : _bus_memregion(bus_memregion), _bus_mem(bus_mem), _bus_disk(bus_disk), _hostdisk(hostdisk), _multiple(0), _regs(), _ctrl(0), _status(), _error(), _dsf(), _splits(), _params(params), _verbose(verbose), _dma()
   {
     Logging::printf("SATA disk %x flags %x sectors %zx\n", hostdisk, _params.flags, size_t(_params.sectors));
   }
 };
 
 PARAM_HANDLER(drive,
-	      "drive:sigma0drive,controller,port - put a drive to the given port of an ahci controller by using a drive from sigma0 as backend.",
+	      "drive:sigma0drive,controller,port[,verbose] - put a drive to the given port of an ahci controller by using a drive from sigma0 as backend.",
 	      "Example: 'drive:0,1,2' to put the first sigma0 drive on the third port of the second controller.")
 {
   DiskParameter params;
@@ -430,7 +437,9 @@ PARAM_HANDLER(drive,
   MessageDisk msg0(hostdisk, &params);
   check0(!mb.bus_disk.send(msg0) || msg0.error != MessageDisk::DISK_OK, "%s could not get disk %x parameters error %x", __PRETTY_FUNCTION__, hostdisk, msg0.error);
 
-  SataDrive *drive = new SataDrive(mb.bus_disk, &mb.bus_memregion, &mb.bus_mem, hostdisk, params);
+  SataDrive *drive = new SataDrive(mb.bus_disk, &mb.bus_memregion, &mb.bus_mem,
+                                   hostdisk, params,
+                                   (argv[3] == ~0UL) ? false : (argv[3] != 0UL));
   mb.bus_diskcommit.add(drive, SataDrive::receive_static<MessageDiskCommit>);
 
   // XXX put on SATA bus
