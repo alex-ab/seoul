@@ -39,18 +39,19 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
     TEXT_OFFSET = 0x18000 >> 1,
     EBDA_FONT_OFFSET = 0x1000,
   };
-  unsigned short _view { 0 };
-  unsigned short _iobase;
   uintptr_t      _framebuffer_ptr;
   uintptr_t      _framebuffer_phys;
   size_t         _framebuffer_size;
+  unsigned       _ebda_segment { };
+  unsigned       _vbe_mode { };
+  mword          _last_videomode_request { };
   VgaRegs        _regs { };
-  unsigned char  _crt_index;
-  unsigned       _ebda_segment;
-  unsigned       _vbe_mode;
-  mword          _last_videomode_request;
+  unsigned short _view { 0 };
+  unsigned short _iobase;
+  unsigned char  _crt_index { };
+  unsigned char  _max_index { };
+  bool           _restore_processed { };
 
-  bool _restore_processed;
 
   char * framebuffer_ptr() const { return reinterpret_cast<char *>(_framebuffer_ptr); }
 
@@ -158,9 +159,13 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
 
 	  // get all modes
 	  ConsoleModeInfo info;
-	  for (MessageConsole msg2(0, &info); msg2.index < (Vbe::MAX_VESA_MODES - 1) && _mb.bus_console.send(msg2); msg2.index++)
+	  for (MessageConsole msg2(0, &info); msg2.index < (Vbe::MAX_VESA_MODES - 1) && _mb.bus_console.send(msg2); msg2.index++) {
 	    *modes++ = info._vesa_mode;
+	    /* remember highest mode index for flat panel request as preferred mode */
+	    _max_index = msg2.index;
+	  }
 	  *modes++ = 0xffff;
+
 
 	  // set the oemstring
 	  char *p = reinterpret_cast<char *>(modes);
@@ -212,6 +217,29 @@ class Vga : public StaticReceiver<Vga>, public BiosCommon
       case 0x4f03: // get vbemode
 	cpu->bx = _vbe_mode;
 	break;
+      case 0x4f11: // flat panel info
+      {
+        unsigned long x = cpu->es.base & ~(0xfffful);
+        unsigned long y = x | (cpu->di & (0xfffful));
+
+        ConsoleModeInfo info {};
+        MessageConsole pref(_max_index, &info);
+        if (!_mb.bus_console.send(pref)) {
+          Logging::printf("requesting resolution of mode index %u failed\n",
+                          _max_index);
+          return false;
+        }
+
+        Logging::printf("vesa: flat panel info %ux%u\n",
+                        pref.info->resolution[0],
+                        pref.info->resolution[1]);
+
+        unsigned v = (unsigned(pref.info->resolution[1]) << 16) |
+                      unsigned(pref.info->resolution[0]);
+        msg.vcpu->copy_out(cpu->es.base + cpu->di, &v, sizeof(v));
+
+        break;
+      }
       case 0x4f15: // DCC
       default:
 	return false;
@@ -608,7 +636,7 @@ public:
 
 
   Vga(Motherboard &mb, unsigned short iobase, char *fb_ptr, uintptr_t framebuffer_phys, size_t framebuffer_size)
-    : BiosCommon(mb), _iobase(iobase), _framebuffer_ptr((uintptr_t)fb_ptr), _framebuffer_phys(framebuffer_phys), _framebuffer_size(framebuffer_size), _crt_index(0), _ebda_segment(), _vbe_mode(), _last_videomode_request(), _restore_processed(false)
+    : BiosCommon(mb), _framebuffer_ptr((uintptr_t)fb_ptr), _framebuffer_phys(framebuffer_phys), _framebuffer_size(framebuffer_size), _iobase(iobase)
   {
     assert(!(framebuffer_phys & 0xfff));
     assert(!(framebuffer_size & 0xfff));
