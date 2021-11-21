@@ -60,8 +60,9 @@ class VirtualBiosKeyboard : public StaticReceiver<VirtualBiosKeyboard>, public B
       { 79 << 8,  KBFLAG_EXTEND0 | 0x69}, // end
       { 73 << 8,  KBFLAG_EXTEND0 | 0x7d}, // pgup
       { 81 << 8,  KBFLAG_EXTEND0 | 0x7a}, // pgdown
-      {110 << 8,   0x76},                 // esc
+      {  0x011b,   0x76},                 // esc (grub-core/term/i386/pc/console.c)
       {       8,   0x66},                 // backspace
+      {  0x1c0d,   0x5a},                 // enter (grub-core/term/i386/pc/console.c)
     };
 
     value = value & ~KBFLAG_NUM;
