@@ -431,7 +431,7 @@ struct MessageConsole
       unsigned height;
     };
   };
-  MessageConsole(unsigned _index, ConsoleModeInfo *_info) : type(TYPE_GET_MODEINFO), id(0), view(0), index(_index), info(_info) {}
+  MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id) : type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}
   MessageConsole(Type _type, unsigned short _id, size_t _size = 0, char * _ptr = nullptr, VgaRegs *_regs = nullptr)
     : type(_type), id(_id), view(0), ptr(_ptr), size(_size), regs(_regs) {}
 };
@@ -482,7 +482,7 @@ struct MessageHostOp
       OP_GET_MODULE,
       OP_GET_MAC,
       OP_GUEST_MEM,
-      OP_ALLOC_FROM_GUEST,
+      OP_RESERVE_IO_RANGE,
       OP_VCPU_CREATE_BACKEND,
       OP_VCPU_BLOCK,
       OP_VCPU_RELEASE,

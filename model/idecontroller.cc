@@ -331,12 +331,14 @@ PARAM_HANDLER(ide,
   MessageDisk msg(argv[4], &params);
   check0(!mb.bus_disk.send(msg), "could not find disk #%x", msg.disknr);
 
-  MessageHostOp msg1(MessageHostOp::OP_ALLOC_FROM_GUEST, (unsigned long)IdeController::BUFFER_SIZE);
-  MessageHostOp msg2(MessageHostOp::OP_GUEST_MEM, 0UL);
-  if (!mb.bus_hostop.send(msg1) || !mb.bus_hostop.send(msg2))
+  MessageHostOp msg1(MessageHostOp::OP_RESERVE_IO_RANGE, (unsigned long)IdeController::BUFFER_SIZE);
+  if (!mb.bus_hostop.send(msg1))
+    Logging::panic("%s failed to alloc %d from guest memory\n", __PRETTY_FUNCTION__, IdeController::BUFFER_SIZE);
+  MessageHostOp msg2(MessageHostOp::OP_ALLOC_IOMEM, msg1.phys, (unsigned long)IdeController::BUFFER_SIZE);
+  if (!mb.bus_hostop.send(msg2))
     Logging::panic("%s failed to alloc %d from guest memory\n", __PRETTY_FUNCTION__, IdeController::BUFFER_SIZE);
   unsigned bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, argv[3]);
-  IdeController *dev = new IdeController(mb.bus_disk, mb.bus_irqlines, argv[2], bdf, msg.disknr, params, msg2.ptr + msg1.phys, msg1.phys);
+  IdeController *dev = new IdeController(mb.bus_disk, mb.bus_irqlines, argv[2], bdf, msg.disknr, params, msg2.ptr, msg1.phys);
   mb.bus_pcicfg.add(dev, IdeController::receive_static<MessagePciConfig>);
   mb.bus_ioin.  add(dev, IdeController::receive_static<MessageIOIn>);
   mb.bus_ioout. add(dev, IdeController::receive_static<MessageIOOut>);

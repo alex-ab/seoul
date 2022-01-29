@@ -118,7 +118,7 @@ private:
 
   unsigned get_vesa_mode(unsigned vesa_mode, ConsoleModeInfo *info)
   {
-    for (MessageConsole msg2(0, info); (msg2.index < (Vbe::MAX_VESA_MODES - 1)) && _mb.bus_console.send(msg2); msg2.index++)
+    for (MessageConsole msg2(0, info, CONSOLE_ID); (msg2.index < (Vbe::MAX_VESA_MODES - 1)) && _mb.bus_console.send(msg2); msg2.index++)
       {
 	if (vesa_mode == info->_vesa_mode)
 	  {
@@ -164,7 +164,7 @@ private:
 
 	  // get all modes
 	  ConsoleModeInfo info;
-	  for (MessageConsole msg2(0, &info); msg2.index < (Vbe::MAX_VESA_MODES - 1) && _mb.bus_console.send(msg2); msg2.index++) {
+	  for (MessageConsole msg2(0, &info, CONSOLE_ID); msg2.index < (Vbe::MAX_VESA_MODES - 1) && _mb.bus_console.send(msg2); msg2.index++) {
 	    *modes++ = info._vesa_mode;
 	    /* remember highest mode index for flat panel request as preferred mode */
 	    _max_index = msg2.index;
@@ -228,7 +228,7 @@ private:
         unsigned long y = x | (cpu->di & (0xfffful));
 
         ConsoleModeInfo info {};
-        MessageConsole pref(_max_index, &info);
+        MessageConsole pref(_max_index, &info, CONSOLE_ID);
         if (!_mb.bus_console.send(pref)) {
           Logging::printf("requesting resolution of mode index %u failed\n",
                           _max_index);
@@ -650,7 +650,7 @@ public:
 
 
     // alloc console
-    MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, CONSOLE_ID, _framebuffer_size, framebuffer_ptr(), &_regs);
+    MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, CONSOLE_ID, _framebuffer_phys, framebuffer_ptr(), &_regs);
     if (!mb.bus_console.send(msg))
       Logging::panic("could not alloc a VGA backend");
     _view = msg.view;
@@ -662,31 +662,25 @@ public:
   }
 };
 
-static size_t _default_vga_fbsize = 128;
-PARAM_HANDLER(vga_fbsize,
-	      "vga_fbsize:size - override the default fbsize for the 'vga' parameter (in KB)")
-{
-  _default_vga_fbsize = argv[0];
-}
-
 PARAM_HANDLER(vga,
-	      "vga:iobase,fbsize=128 - attach a virtual VGA controller.",
-	      "Example: 'vga:0x3c0,4096'",
-	      "The framebuffersize is given in kilobyte and the minimum is 128k.",
+	      "vga:iobase - attach a virtual VGA controller.",
+	      "Example: 'vga:0x3c0'",
+	      "The framebuffersize is detected based on the host.",
 	      "This also adds support for VGA and VESA graphics BIOS.")
 {
-  size_t fbsize = argv[1];
-  if (fbsize == ~0ul) fbsize = _default_vga_fbsize;
+  MessageConsole  msg_gui(MessageConsole::TYPE_ALLOC_CLIENT, Vga::CONSOLE_ID);
+  if (!mb.bus_console.send(msg_gui))
+    Logging::panic("vga: failed to alloc client gui\n");
 
-  // We need at least 128k for 0xa0000-0xbffff.
-  if (fbsize   < 128)  fbsize = 128;
-  fbsize <<= 10;
-  MessageHostOp msg(MessageHostOp::OP_ALLOC_FROM_GUEST, fbsize);
-  MessageHostOp msg2(MessageHostOp::OP_GUEST_MEM, 0UL);
-  if (!mb.bus_hostop.send(msg) || !mb.bus_hostop.send(msg2))
-    Logging::panic("%s failed to alloc %zd from guest memory\n", __PRETTY_FUNCTION__, fbsize);
+  MessageHostOp msg_range(MessageHostOp::OP_RESERVE_IO_RANGE, msg_gui.size);
+  if (!mb.bus_hostop.send(msg_range))
+    Logging::panic("vga: failed to reserve io range\n");
 
-  Vga *dev = new Vga(mb, argv[0], msg2.ptr + msg.phys, msg.phys, fbsize);
+  MessageHostOp msg_iomem(MessageHostOp::OP_ALLOC_IOMEM, Vga::LOW_BASE, msg_gui.size);
+  if (!mb.bus_hostop.send(msg_iomem))
+    Logging::panic("vga: failed to alloc io mem\n");
+
+  Vga *dev = new Vga(mb, argv[0], msg_iomem.ptr, msg_range.phys, msg_gui.size);
   mb.bus_ioin     .add(dev, Vga::receive_static<MessageIOIn>);
   mb.bus_ioout    .add(dev, Vga::receive_static<MessageIOOut>);
   mb.bus_bios     .add(dev, Vga::receive_static<MessageBios>);
@@ -696,4 +690,3 @@ PARAM_HANDLER(vga,
   mb.bus_discovery.add(dev, Vga::receive_static<MessageDiscovery>);
   mb.bus_restore.add(dev, Vga::receive_static<MessageRestore>);
 }
-
