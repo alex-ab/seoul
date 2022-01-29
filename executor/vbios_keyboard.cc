@@ -219,7 +219,6 @@ public:
       case MessageHostOp::OP_NOTIFY_IRQ:
       case MessageHostOp::OP_VIRT_TO_PHYS:
       case MessageHostOp::OP_GUEST_MEM:
-      case MessageHostOp::OP_ALLOC_FROM_GUEST:
       case MessageHostOp::OP_GET_MODULE:
       case MessageHostOp::OP_GET_MAC:
       case MessageHostOp::OP_VCPU_CREATE_BACKEND:

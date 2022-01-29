@@ -444,7 +444,7 @@ struct MessageConsole
     };
   };
   MessageConsole(Type _type = TYPE_ALLOC_CLIENT, unsigned short _id=0) : type(_type), id(_id), view(0), ptr(0) {}
-  MessageConsole(unsigned _index, ConsoleModeInfo *_info) : type(TYPE_GET_MODEINFO), id(0), view(0), index(_index), info(_info) {}
+  MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id) : type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}
   MessageConsole(Type _type, unsigned short _id, const char *_name, char * _ptr, size_t _size, VgaRegs *_regs)
     : type(_type), id(_id), view(0), name(_name), ptr(_ptr), size(_size), regs(_regs) {}
   MessageConsole(unsigned short _id, unsigned short _view, unsigned _input_device, unsigned _input_data)
@@ -497,7 +497,7 @@ struct MessageHostOp
       OP_GET_MODULE,
       OP_GET_MAC,
       OP_GUEST_MEM,
-      OP_ALLOC_FROM_GUEST,
+      OP_RESERVE_IO_RANGE,
       OP_VCPU_CREATE_BACKEND,
       OP_VCPU_BLOCK,
       OP_VCPU_RELEASE,
