@@ -67,7 +67,7 @@ private:
     update_cursor(0, ((pos / 80) << 8) | (pos % 80));
 
     if (update) {
-        MessageConsole msg2(MessageConsole::TYPE_CONTENT_UPDATE);
+        MessageConsole msg2(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
         _mb.bus_console.send(msg2);
     }
   }
@@ -293,7 +293,7 @@ private:
 	      else
 		base[row*80 + col] = base[(row + rows)*80 + col];
 
-	  MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+	  MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
 	  _mb.bus_console.send(msg);
 	}
 	break;
@@ -317,7 +317,7 @@ private:
 		if (cpu->ah & 1) framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 1] = cpu->bl;
 		framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 0] = cpu->al;
 
-		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
 		_mb.bus_console.send(msg);
 	    }
 	  }
@@ -334,7 +334,7 @@ private:
 	  update_cursor(cpu->bh, ((pos / 80) << 8) | (pos % 80));
 
 	  if (update) {
-		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE);
+		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
 		_mb.bus_console.send(msg);
 	  }
 	}
@@ -579,7 +579,7 @@ public:
     discovery_write_dw("bda",  0x63, _iobase + 0x14, 2); // crt address
 
 
-    MessageConsole msg2(MessageConsole::TYPE_GET_FONT);
+    MessageConsole msg2(MessageConsole::TYPE_GET_FONT, CONSOLE_ID);
     msg2.ptr = framebuffer_ptr();
     if (_mb.bus_console.send(msg2)) {
       // write it to the EBDA
@@ -611,7 +611,7 @@ public:
       if (msg.devtype == MessageRestore::VGA_VIDEOMODE) {
           if (msg.write) {
               set_videomode(msg.bytes);
-              MessageConsole cmsg(MessageConsole::TYPE_SWITCH_VIEW);
+              MessageConsole cmsg(MessageConsole::TYPE_SWITCH_VIEW, CONSOLE_ID);
               cmsg.view = _view;
               _mb.bus_console.send(cmsg);
           }
@@ -648,7 +648,8 @@ public:
 
 
     // alloc console
-    MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, 0, "VM", framebuffer_ptr(), _framebuffer_phys, &_regs);
+    MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, CONSOLE_ID,
+                       _framebuffer_phys, framebuffer_ptr(), &_regs);
     if (!mb.bus_console.send(msg))
       Logging::panic("could not alloc a VGA backend");
     _view = msg.view;

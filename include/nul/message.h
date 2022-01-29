@@ -390,20 +390,18 @@ struct MessageConsole
       TYPE_ALLOC_CLIENT,
       // allocate a new view for a client
       TYPE_ALLOC_VIEW,
+      // free a view
+      TYPE_FREE_VIEW,
       // get information about a mode
       TYPE_GET_MODEINFO,
       // get a FONT
       TYPE_GET_FONT,
       // switch to another view
       TYPE_SWITCH_VIEW,
-      // the user pressed a key
-      TYPE_KEY,
-      // the user requests a reset
-      TYPE_RESET,
-      // the user requests to start a new PD
-      TYPE_START,
-      // the user requests to kill a PD
-      TYPE_KILL,
+      // update of content may stop
+      TYPE_PAUSE,
+      // update of content may resume
+      TYPE_RESUME,
       // the user requests a debug feature
       TYPE_DEBUG,
       // content of vga/framebuffer changed by model
@@ -414,10 +412,6 @@ struct MessageConsole
   union
   {
     struct {
-      const char *clientname;
-    };
-    struct {
-      const char *name;
       char    * ptr;
       size_t size;
       VgaRegs *regs;
@@ -430,12 +424,6 @@ struct MessageConsole
       unsigned input_device;
       unsigned input_data;
     };
-    struct { //used with TYPE_START
-      cap_sel cap_sc_usage;
-      unsigned long mem;
-      unsigned res;
-      char const * cmdline;
-    };
     struct {
       unsigned x;
       unsigned y;
@@ -443,12 +431,9 @@ struct MessageConsole
       unsigned height;
     };
   };
-  MessageConsole(Type _type = TYPE_ALLOC_CLIENT, unsigned short _id=0) : type(_type), id(_id), view(0), ptr(0) {}
   MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id) : type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}
-  MessageConsole(Type _type, unsigned short _id, const char *_name, char * _ptr, size_t _size, VgaRegs *_regs)
-    : type(_type), id(_id), view(0), name(_name), ptr(_ptr), size(_size), regs(_regs) {}
-  MessageConsole(unsigned short _id, unsigned short _view, unsigned _input_device, unsigned _input_data)
-    : type(TYPE_KEY), id(_id), view(_view), input_device(_input_device), input_data(_input_data) {}
+  MessageConsole(Type _type, unsigned short _id, size_t _size = 0, char * _ptr = nullptr, VgaRegs *_regs = nullptr)
+    : type(_type), id(_id), view(0), ptr(_ptr), size(_size), regs(_regs) {}
 };
 
 
