@@ -147,20 +147,20 @@ def generate_functions(name, flags, snippet, enc, functions, l2):
     # parameter handling
     imm = ";entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
     additions = [("MEMONLY", "if (~entry->modrminfo & MRM_REG) {"),
-		 ("REGONLY", "if (entry->modrminfo & MRM_REG) {"),
-		 ("OS2",     "entry->operand_size = 2"),
-		 ("OS1",     "entry->operand_size = 1"),
-		 ("CONST1",  "entry->immediate = 1" + imm),
-		 ("IMM1",    "fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
-		 ("IMM2",    "fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
-		 ("IMM3",    "fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
+		 ("REGONLY", "		if (entry->modrminfo & MRM_REG) {"),
+		 ("OS2",     "		entry->operand_size = 2"),
+		 ("OS1",     "		entry->operand_size = 1"),
+		 ("CONST1",  "		entry->immediate = 1" + imm),
+		 ("IMM1",    "		fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
+		 ("IMM2",    "		fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
+		 ("IMM3",    "		fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
 		 ("IMMO",    imm),
-		 ("MOFS",    "fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
-		 ("LONGJMP", "fetch_code(entry, 2 + (1 << entry->operand_size))"),
-		 ("IMPL",    "entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
-		 ("ECX",     "entry->src = &_cpu->ecx"),
-		 ("EDX",     "entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
-		 ("EAX",     "entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
+		 ("MOFS",    "		fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
+		 ("LONGJMP", "		fetch_code(entry, 2 + (1 << entry->operand_size))"),
+		 ("IMPL",    "		entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
+		 ("ECX",     "		entry->src = &_cpu->ecx"),
+		 ("EDX",     "		entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
+		 ("EAX",     "		entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
 		 ]
     l2.extend(filter(lambda x: x, map(lambda x: x[0] in flags and x[1] or "", additions)))
 
@@ -170,14 +170,14 @@ def generate_functions(name, flags, snippet, enc, functions, l2):
     if "IMM1" in flags and "BITS" in flags:     f2.remove("BITS")
     if name in ["cltd"]:                        f2.remove("DIRECTION")
     f = map(lambda x: "IC_%s"%x, filter(lambda x: x in f2, flags))
-    if f: l2.append("entry->flags = %s"%"|".join(f))
+    if f: l2.append("		entry->flags = %s"%"|".join(f))
 
     # operand size loop
     s = ""
     for op_size in range(3):
 	no_os = ("BYTE" in flags or "NO_OS" in flags) and "HAS_OS" not in flags
 	if no_os or op_size > 0:
-	    s += op_size == 1 and "if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
+	    s += op_size == 1 and "	if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
 	    if "IMMO"   in flags:
 		s += "fetch_code(entry, %d);"%(1 << op_size)
 		s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);"  or
@@ -197,11 +197,18 @@ def generate_code(encodings):
     code = {}
     functions={}
     code_prefixes=[]
+    l_in_p=-1
+    l_in_p_key=""
     for i in range(len(encodings)):
 	name, flags, snippet, enc = encodings[i]
 	print >>sys.stderr, "%10s %s %s"%(name, enc, flags)
 	for l in range(len(enc)):
+	    key = enc[l]
 	    if l == len(enc)-1 or l == len(enc)-2 and "GRP" in flags:
+		if key != l_in_p_key :
+		    l_in_p     = -1
+		    l_in_p_key = enc
+
 		n = str(enc[:l])
 		if n not in code_prefixes:
 		    code_prefixes.append(n)
@@ -210,37 +217,45 @@ def generate_code(encodings):
 		l2 = []
 		if "PREFIX" in flags:  l2.extend(snippet)
 		if "MODRM"  in flags:
-		    l2.append("get_modrm()")
+		    l2.append("	get_modrm()")
 		    if "GRP" not in flags:
-			l2.append("entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
+			l2.append("	entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
 		if l == len(enc)-2:
-		    if enc[l] not in p:
-			l2.append("switch (entry->data[entry->offset_opcode] & 0x38) {")
-			l2.append('default:')
-			l2.append('Logging::printf("unimpl GRP case %02x%02x%02x at %d\\n", entry->data[0], entry->data[1], entry->data[2], __LINE__)')
-			l2.append("UNIMPLEMENTED(this)")
-			l2.append('}')
-			p[enc[l]] = l2
+		    #override p[key] if former same instruction was shorter, e.g d3 and later d3 00
+		    start_switch = (key == l_in_p_key and l_in_p < len(enc))
+		    if start_switch or key not in p:
+			l2.append("	switch (entry->data[entry->offset_opcode] & 0x38) {")
+			l2.append('	default:')
+			l2.append('	Logging::printf("unimpl GRP case %02x%02x%02x at %d\\n", entry->data[0], entry->data[1], entry->data[2], __LINE__)')
+			l2.append("	UNIMPLEMENTED(this)")
+			l2.append('	}')
+			p[key] = l2
 		    l2 = []
-		    l2.append("case 0x%s & 0x38: {"%enc[l+1])
-		    l2.append("/* instruction '%s' %s %s */"%(name, enc, flags))
+		    l2.append("	case 0x%s & 0x38: {"%enc[l+1])
+		    l2.append("	/* instruction '%s' %s %s */"%(name, enc, flags))
 		    generate_functions(name, flags, snippet, enc, functions, l2)
-		    l2.append("break; }")
-		    p[enc[l]] = p[enc[l]][:2] + l2 + p[enc[l]][2:]
-		elif enc[l] not in p:
-		    l2 = ["/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
+		    l2.append("		break")
+		    l2.append("	}")
+		    p[key] = p[key][:2] + l2 + p[key][2:]
+		    l_in_p = len(enc)
+		elif key not in p:
+		    l2 = ["	/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
 		    if "PREFIX" not in flags:
 			generate_functions(name, flags, snippet, enc, functions, l2)
-		    key = enc[l]
-		    if "IMPL" in flags:  key = "%x ... %#x"%(int(key, 16) & ~0x7, int(key, 16) | 7)
+		    if "IMPL" in flags:
+			  key = "%x ... %#x"%(int(key, 16) & ~0x7, int(key, 16) | 7)
+			  print >>sys.stderr, " IMPL"
 		    p[key] = l2
+
+		    l_in_p     = len(enc)
+		    l_in_p_key = key
 		break
 	    else:
 		n = str(enc[:l])
 		if n not in code_prefixes:
 		    code_prefixes.append(n)
 		    code[code_prefixes.index(n)] = {}
-		code[code_prefixes.index(n)].setdefault(enc[l], ["op_mode = %d"%len(code_prefixes)])
+		code[code_prefixes.index(n)].setdefault(key, ["op_mode = %d"%len(code_prefixes)])
     return code, functions
 
 
@@ -267,7 +282,8 @@ def print_code(code, functions):
 	    print "{"
 	    for l in code[i][j]:
 		print l,";"
-	    print "break; }"
+	    print "	break;"
+	    print "}"
 	print """default:
 	      fetch_code(entry, 4);
 	      Logging::printf("unimplemented case %x at line %d code %02x%02x%02x\\n", code, __LINE__, entry->data[0], entry->data[1], entry->data[2]);
