@@ -649,19 +649,20 @@ struct MessageDiscovery
     READ
   } type;
   struct {
-    const char * resource;
-    size_t     offset;
+    char const * const resource;
+    size_t             offset;
     union {
-      const void * data;
-      unsigned   * dw;
+      void const * const data;
+      unsigned   *       dw;
     };
-    size_t     count;
+    size_t count;
   };
-  MessageDiscovery() : type(DISCOVERY) {}
+  MessageDiscovery()
+    : type(DISCOVERY), resource(nullptr), offset(0), data(nullptr), count(0) {}
   MessageDiscovery(const char * _resource, size_t _offset, const void * _data, size_t _count)
     : type(WRITE), resource(_resource), offset(_offset), data(_data), count(_count) {}
   MessageDiscovery(const char * _resource, size_t _offset, unsigned * _dw)
-    : type(READ), resource(_resource), offset(_offset), dw(_dw) {}
+    : type(READ), resource(_resource), offset(_offset), dw(_dw), count(0) {}
 };
 
 /****************************************************/

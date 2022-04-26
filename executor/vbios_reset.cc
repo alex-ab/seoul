@@ -76,6 +76,10 @@ class VirtualBiosReset : public StaticReceiver<VirtualBiosReset>, public BiosCom
 
     bool bsp = !vcpu->get_last();
 
+    // reset resources
+    for (unsigned i = 0; i < MAX_RESOURCES; i++)
+      _resources[i] = { };
+
     // the APIC
     state->eax = 0xfee00800 | (bsp ? 0x100U : 0U);
     state->edx = 0;
