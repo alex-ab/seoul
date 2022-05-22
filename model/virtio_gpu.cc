@@ -169,7 +169,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 		struct resource_2d {
 			void *        memory_vmm;
-			gpu_mem_entry guest_fb_memory[768];
+			gpu_mem_entry guest_fb_memory[1280];
 			unsigned      valid_memory_entries;
 			uint16          format;
 			uint16          valid;
@@ -316,7 +316,9 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		           unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               16, 0xf7a80000ull /* phys bar address XXX */),
+			               16 /* type */,
+			               0xf7a80000ull /* phys bar address XXX */,
+			               2 /* queues */),
 			_bus_console(bus_console)
 		{ }
 
@@ -413,7 +415,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 		void notify (unsigned queue) override
 		{
-			if (queue >= QUEUES_NUM) {
+			if (queue >= QUEUES_MAX) {
 				Logging::printf("unknown queue number %u\n", queue);
 				return;
 			}
@@ -706,9 +708,13 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 	                              response_size, name,
 	                              [&](gpu_set_scanout const &scanout) {
 
+#if 0
 		bool verbose = (scanout.resource_id == 0) ||
 		               scanout.r.width != width ||
 		               scanout.r.height != height;
+#else
+		bool verbose = false;
+#endif
 
 		if (verbose)
 			Logging::printf("%s: id=%u %ux%x+%ux%u scanout=%u (%s)", name,
@@ -848,7 +854,7 @@ size_t Virtio_gpu::_gpu_attach_backing(uintptr_t const in,   size_t const in_siz
 			unsigned const max_entries = sizeof(resource.guest_fb_memory) /
 			                             sizeof(resource.guest_fb_memory[0]);
 			if (nr_entries > max_entries) {
-				Logging::printf("%s: too many entries\n", name);
+				Logging::printf("%s: too many entries %u\n", name, nr_entries);
 				return;
 			}
 			memcpy(resource.guest_fb_memory, mem_desc,

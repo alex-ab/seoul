@@ -1,7 +1,7 @@
 // -*- Mode: C++ -*-
 /**
  * @file
- * Message Type defintions.
+ * Message Type definitions.
  *
  * Copyright (C) 2009, Bernhard Kauer <bk@vmmon.org>
  * Economic rights: Technische Universitaet Dresden (Germany)
@@ -9,7 +9,9 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * This file is part of Vancouver.
+ * Copyright (C) 2021-2022 Alexander Boettcher
+ *
+ * This file is part of Seoul/Vancouver.
  *
  * Vancouver is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -854,6 +856,23 @@ struct MessageRestore
     bool magic_string_check() { return magic_string == MAGIC_STRING_DEVICE_DESC; }
 };
 
+
+struct MessageAudio
+{
+  enum Type { AUDIO_START, AUDIO_STOP, AUDIO_OUT, AUDIO_IN,
+              AUDIO_CONTINUE_TX, AUDIO_DRAIN_TX };
+
+  enum Type type;
+  uintptr_t data     { };
+  unsigned  size     { };
+  unsigned  consumed { };
+  unsigned  id       { };
+
+  MessageAudio(Type const t) : type(t) { }
+  MessageAudio(Type const t, unsigned i) : type(t), id(i) { }
+  MessageAudio(Type const t, uintptr_t d, unsigned s, unsigned c)
+  : type(t), data(d), size(s), consumed(c) { }
+};
 
 
 /* EOF */
