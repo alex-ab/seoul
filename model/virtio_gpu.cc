@@ -316,7 +316,9 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		           unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               16, 0xf7a80000ull /* phys bar address XXX */),
+			               16 /* type */,
+			               0xf7a80000ull /* phys bar address XXX */,
+			               2 /* queues */),
 			_bus_console(bus_console)
 		{ }
 
@@ -413,7 +415,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 		void notify (unsigned queue) override
 		{
-			if (queue >= QUEUES_NUM) {
+			if (queue >= QUEUES_MAX) {
 				Logging::printf("unknown queue number %u\n", queue);
 				return;
 			}
@@ -706,9 +708,13 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 	                              response_size, name,
 	                              [&](gpu_set_scanout const &scanout) {
 
+#if 0
 		bool verbose = (scanout.resource_id == 0) ||
 		               scanout.r.width != width ||
 		               scanout.r.height != height;
+#else
+		bool verbose = false;
+#endif
 
 		if (verbose)
 			Logging::printf("%s: id=%u %ux%x+%ux%u scanout=%u (%s)", name,

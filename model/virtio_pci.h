@@ -99,22 +99,22 @@ class Virtio::Device
 		uint8  const _irq;
 		uint8  const _device_type;
 		uint16 const _bdf;
-
-		uint32       _control   { 0 };
-		uint32       _status    { 1u << 20 /* cap list support */ };
-
-		uint64 const _phys_bar_base;
 		uint16 const _phys_bar_size { 0x1000u };
+		uint64 const _phys_bar_base; /* XXX memory layout with bool uint16 etc */
 
+		uint8  const _queues_count;
 		bool         _bar0_size  { false };
 		bool         _all_notify { false };
 		bool         _verbose    { false };
+
+		uint32       _control   { 0 };
+		uint32       _status    { 1u << 20 /* cap list support */ };
 
 		uint32       _feature_select  { 0 };
 		uint32       _device_status   { 0 };
 		uint32       _queue_select    { 0 };
 
-		enum { QUEUES_NUM = 2, VIRTIO_QUEUE_SIZE = 512 };
+		enum { QUEUES_MAX = 4, VIRTIO_QUEUE_SIZE = 512 };
 
 		struct Queue {
 			unsigned queue_size    { VIRTIO_QUEUE_SIZE };
@@ -134,7 +134,7 @@ class Virtio::Device
 
 			Virtio::Queue queue { };
 
-		} _queues[QUEUES_NUM];
+		} _queues[QUEUES_MAX];
 
 		Queue &queue () { return _queues[_queue_select]; }
 
@@ -178,19 +178,20 @@ class Virtio::Device
 
 		virtual void notify (unsigned) = 0;
 
-		~Device();
+		~Device() { }
 
 	public:
 
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
 		       DBus<MessageMemRegion> &bus_memregion,
-		       unsigned char irq, unsigned short bdf,
-		       uint8 device_type, uint64 phys_bar_base)
+		       unsigned char const irq, unsigned short const bdf,
+		       uint8 const device_type, uint64 const phys_bar_base,
+		       uint8 const queues_count)
 		:
 			_bus_irqlines(bus_irqlines),
 			_bus_memregion(bus_memregion),
 			_irq(irq), _device_type(device_type), _bdf(bdf),
-			_phys_bar_base(phys_bar_base)
+			_phys_bar_base(phys_bar_base), _queues_count(queues_count)
 		{ }
 
 		void reset()
@@ -205,7 +206,7 @@ class Virtio::Device
 			_device_status  = 0u;
 			_queue_select   = 0u;
 
-			for (unsigned i = 0; i < QUEUES_NUM; i++) {
+			for (unsigned i = 0; i < QUEUES_MAX; i++) {
 				_queues[i].queue_size = VIRTIO_QUEUE_SIZE;
 				for (unsigned j = 0; j < sizeof(_queues)/sizeof(_queues[0]); j++)
 					_queues[i].phys_addr[j] = 0u;
@@ -356,17 +357,17 @@ class Virtio::Device
 				break;
 			case 0x10: /* msix config, num queues */
 				if (msg.read)
-					*msg.ptr = unsigned(QUEUES_NUM) << 16;
+					*msg.ptr = unsigned(_queues_count) << 16;
 				break;
 			case 0x14: /* device status (1), config gen (1), queue select (2) */
 				if (msg.read)
 					*msg.ptr = _device_status | (_queue_select << 16);
 				else {
-					if ((*msg.ptr >> 16) < QUEUES_NUM) {
+					if ((*msg.ptr >> 16) < _queues_count) {
 						_device_status = *msg.ptr & 0xff;
 						_queue_select  = *msg.ptr >> 16;
 					} else
-						Logging::printf("virtio, queue select out of range");
+						Logging::printf("virtio, queue select out of range\n");
 				}
 				break;
 			case 0x18: /* queue size, queue msix vector */
@@ -398,18 +399,18 @@ class Virtio::Device
 					queue().phys_addr[(offset - 0x20) / 4] = *msg.ptr;
 				break;
 			/* notify_offset intentional start with 1 and not 0, so not using -1 here for the range */
-			case BAR_OFFSET_NOTIFY ... BAR_OFFSET_NOTIFY + QUEUES_NUM * NOTIFY_OFF_MULTIPLIER:
+			case BAR_OFFSET_NOTIFY ... BAR_OFFSET_NOTIFY + QUEUES_MAX * NOTIFY_OFF_MULTIPLIER:
 			{
 				if (msg.read) {
 					*msg.ptr = 0;
 					break;
 				}
 
-				/* index = [0 - QUEUES_NUM] - 0 is invalid, used as index - 1 */
+				/* index = [0 - QUEUES_MAX] - 0 is invalid, used as index - 1 */
 				unsigned queue_index = (offset - BAR_OFFSET_NOTIFY) / NOTIFY_OFF_MULTIPLIER;
 
-				if ((queue_index == 0) || queue_index > QUEUES_NUM) {
-					for (unsigned i = 0; i < QUEUES_NUM; i++) {
+				if ((queue_index == 0) || queue_index > _queues_count) {
+					for (unsigned i = 0; i < _queues_count; i++) {
 						if (_queues[i].queue.enabled())
 							notify(i);
 					}

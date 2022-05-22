@@ -232,7 +232,9 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 		             unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               18, 0xf7a00000ull /* phys bar address XXX */)
+			               18 /* type */,
+			               0xf7a00000ull /* phys bar address XXX */,
+			               2 /* queues */)
 		{ }
 
 		bool receive(MessageBios &msg) {

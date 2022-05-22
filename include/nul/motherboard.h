@@ -82,6 +82,7 @@ class Motherboard
   DBus<MessageTimeout>      bus_timeout { };    ///< Timer expiration notifications
   DBus<MessageTimer>        bus_timer { };      ///< Request for timers
   DBus<MessageVesa>         bus_vesa { };
+  DBus<MessageAudio>        bus_audio { };
 
   DBus<MessageRestore>      bus_restore { };
 

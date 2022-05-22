@@ -855,5 +855,19 @@ struct MessageRestore
 };
 
 
+struct MessageAudio
+{
+  enum Type { AUDIO_START, AUDIO_STOP, AUDIO_OUT, AUDIO_IN, AUDIO_CONTINUE_TX };
+  enum Type type;
+  uintptr_t data { };
+  unsigned  size { };
+  unsigned  consumed { };
+
+  MessageAudio(Type const type) : type(type) { }
+
+  MessageAudio(Type const type, uintptr_t d, unsigned s, unsigned c)
+  : type(type), data(d), size(s), consumed(c) { }
+};
+
 
 /* EOF */
