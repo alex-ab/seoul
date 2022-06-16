@@ -422,7 +422,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 			auto &used_queue = _queues[queue].queue;
 
-			bool inject = used_queue.consume([&] (auto const descriptor) {
+			bool inject = used_queue.consume([&] (auto const descriptor, auto) {
 
 				auto const request = vmm_address(descriptor.addr, descriptor.len);
 				auto const request_size = descriptor.len;

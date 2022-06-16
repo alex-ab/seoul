@@ -282,7 +282,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 				EVENT_KEY, EVENT_SYNC, EVENT_DONE
 			} event_state { EVENT_KEY };
 
-			auto button = [&] (auto const descriptor)
+			auto button = [&] (auto const descriptor, auto)
 			{
 				auto const data = vmm_address(descriptor.addr, descriptor.len);
 				auto const size = descriptor.len;
@@ -338,7 +338,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 				EVENT_KEY, EVENT_SYNC, EVENT_DONE
 			} event_state { EVENT_KEY };
 
-			auto wheel = [&] (auto const descriptor)
+			auto wheel = [&] (auto const descriptor, auto)
 			{
 				auto const data = vmm_address(descriptor.addr, descriptor.len);
 				auto const size = descriptor.len;
@@ -397,7 +397,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 				EVENT_X, EVENT_Y, EVENT_SYNC, EVENT_DONE
 			} event_state { EVENT_X };
 
-			auto read_x = [&] (auto const descriptor)
+			auto read_x = [&] (auto const descriptor, auto)
 			{
 				auto const data = vmm_address(descriptor.addr, descriptor.len);
 				auto const size = descriptor.len;

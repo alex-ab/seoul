@@ -21,16 +21,32 @@ namespace Virtio { class Queue; }
 
 class Virtio::Queue
 {
-	private:
-
-		struct index_desc { uint16 idx; };
+	public:
 
 		struct index_ring {
 			uint16 idx;
 
 			index_ring operator += (unsigned i) {
 				idx = (idx + i) % 65536; return *this; }
+
+			index_ring operator + (uint16 const i) const {
+				return index_ring { uint16((idx + i) % 65536) }; }
+
+			bool operator != (index_ring const &o) const {
+				return (idx != o.idx); }
 		};
+
+		struct desc
+		{
+			uint64 addr;
+			uint32 len;
+			uint16 flags;
+			uint16 next;
+		};
+
+	private:
+
+		struct index_desc { uint16 idx; };
 
 		unsigned   max_index  { 0 };
 		index_ring ring_index { 0 };
@@ -87,14 +103,6 @@ class Virtio::Queue
 			}
 		} queue_used { };
 
-		struct desc
-		{
-			uint64 addr;
-			uint32 len;
-			uint16 flags;
-			uint16 next;
-		};
-
 		struct
 		{
 			uintptr_t base;
@@ -137,24 +145,24 @@ class Virtio::Queue
 		}
 
 		template <typename FUNC>
-		bool consume(FUNC func)
+		bool consume(index_ring &ri, FUNC func)
 		{
 			bool update = false;
 
 			VMM_MEMORY_BARRIER;
 
-			for (auto avail_idx = queue_avail.idx(); ring_index.idx != avail_idx.idx; ring_index += 1) {
+			for (auto avail_idx = queue_avail.idx(); ri.idx != avail_idx.idx; ri += 1) {
 
-				index_desc id = queue_avail.get(ring_index, max_index);
+				index_desc id = queue_avail.get(ri, max_index);
 				desc       de = queue_desc.get(id, max_index);
 
 				if (!de.addr || !de.len) { break; }
 
 				try {
-					size_t consumed = func(de);
+					size_t consumed = func(de, ri);
 					if (!consumed) { break; }
 
-					queue_used.add(ring_index, id, consumed, max_index);
+					queue_used.add(ri, id, consumed, max_index);
 
 					update = true;
 				} catch (...) {
@@ -170,5 +178,11 @@ class Virtio::Queue
 			}
 
 			return update && queue_avail.inject();
+		}
+
+		template <typename FUNC>
+		bool consume(FUNC func)
+		{
+			return consume(ring_index, func);
 		}
 };
