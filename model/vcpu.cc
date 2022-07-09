@@ -68,10 +68,22 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         res = false;
       }
     }
+//    Logging::printf("%s %x->%x\n", __func__, msg.cpuid_index, reg);
+
     if (!CPUID_read(reg | 0, msg.cpu->eax)) msg.cpu->eax = 0;
     if (!CPUID_read(reg | 1, msg.cpu->ebx)) msg.cpu->ebx = 0;
     if (!CPUID_read(reg | 2, msg.cpu->ecx)) msg.cpu->ecx = 0;
     if (!CPUID_read(reg | 3, msg.cpu->edx)) msg.cpu->edx = 0;
+
+/*
+	Logging::printf("%s %x->%x %x:%x:%x:%x\n",
+	                __func__, msg.cpuid_index, reg,
+	                msg.cpu->eax,
+	                msg.cpu->ebx,
+	                msg.cpu->ecx,
+	                msg.cpu->edx);
+*/
+
     msg.mtr_out |= MTD_GPR_ACDB;
     return res;
   }
@@ -105,10 +117,12 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       assert(msg.mtr_in & MTD_SYSENTER);
       msg.cpu->edx_eax((&msg.cpu->sysenter_cs)[msg.cpu->ecx - 0x174]);
       break;
-    case 0x179: /* MCG CAP */
+    case 0x48: // IA32_SPEC_CTRL - speculation control
     case 0x8b: // microcode
       // MTRRs
     case 0xfe:
+    case 0x122: // IA32_TSX_CTRL
+    case 0x179: /* MCG CAP */
     case 0x250:
     case 0x258:
     case 0x259:
@@ -118,7 +132,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       break;
     default:
       dprintf("unsupported rdmsr %x at %x\n",  msg.cpu->ecx, msg.cpu->eip);
-      GP0(msg);
+      msg.cpu->edx_eax(0);
+      //GP0(msg);
     }
     msg.mtr_out |= MTD_GPR_ACDB;
   }
