@@ -249,7 +249,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 				unsigned       length    = resource.guest_fb_memory[i].length;
 				unsigned const unaligned = resource_offset % guest_stride;
-				unsigned const row_rest  = guest_stride - unaligned;
+				unsigned const row_rest  = VMM_MIN(length, guest_stride - unaligned);
 
 				/* since whole row not available to fn, copy w/o fn invocation */
 				if (unaligned) {
@@ -978,7 +978,7 @@ size_t Virtio_gpu::_gpu_move_to_host(uintptr_t const in,  size_t const in_size,
 			copy_pixels(resource, queue, [&](uintptr_t host, uintptr_t guest, unsigned const y) {
 				if (y < transfer.r.y)
 					return true;  /* continue loop */
-				if (transfer.r.y + transfer.r.height < y)
+				if (transfer.r.y + transfer.r.height <= y)
 					return false; /* stop loop */
 
 				memcpy(reinterpret_cast<void *>(host  + transfer.r.x * 4),
