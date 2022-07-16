@@ -372,7 +372,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 
 		bool receive(MessageMem &msg)
 		{
-			if (msg.phys < _phys_bar_base || _phys_bar_base + _phys_bar_size <= msg.phys)
+			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
 			unsigned const offset = msg.phys - _phys_bar_base;

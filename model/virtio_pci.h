@@ -94,25 +94,30 @@ class Virtio::Device
 			BAR_OFFSET_NOTIFY     = 0x600,
 			RANGE_SIZE            = 0x200,
 			NOTIFY_OFF_MULTIPLIER = 8, /* for 64bit wide access */
+
+			PHYS_BAR_SIZE = 0x1000,
 		};
 
 		uint8  const _irq;
 		uint8  const _device_type;
-		uint16 const _bdf;
-		uint16 const _phys_bar_size { 0x1000u };
-		uint64 const _phys_bar_base; /* XXX memory layout with bool uint16 etc */
-
 		uint8  const _queues_count;
-		bool         _bar0_size  { false };
-		bool         _all_notify { false };
-		bool         _verbose    { false };
+
+		uint16 const _bdf;
+		uint64 const _phys_bar_base;
+
+		bool         _bar0_size      { false };
+		bool         _all_notify     { false };
+		bool         _verbose        { false };
+		bool         _config_changed { false };
+
 
 		uint32       _control   { 0 };
 		uint32       _status    { 1u << 20 /* cap list support */ };
 
-		uint32       _feature_select  { 0 };
-		uint32       _device_status   { 0 };
-		uint32       _queue_select    { 0 };
+		uint32       _feature_select    { 0 };
+		uint8        _device_status     { 0 };
+		uint8        _config_generation { 0 };
+		uint16       _queue_select      { 0 };
 
 		enum { QUEUES_MAX = 4, VIRTIO_QUEUE_SIZE = 512 };
 
@@ -180,6 +185,19 @@ class Virtio::Device
 
 		~Device() { }
 
+		uint8 config_generation()
+		{
+
+			if (_config_changed) {
+				_config_generation ++;
+				_config_changed = false;
+			}
+
+			return _config_generation;
+		}
+
+		void config_changed() { _config_changed = true; }
+
 	public:
 
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
@@ -190,8 +208,9 @@ class Virtio::Device
 		:
 			_bus_irqlines(bus_irqlines),
 			_bus_memregion(bus_memregion),
-			_irq(irq), _device_type(device_type), _bdf(bdf),
-			_phys_bar_base(phys_bar_base), _queues_count(queues_count)
+			_irq(irq), _device_type(device_type),
+			_queues_count(queues_count), _bdf(bdf),
+			_phys_bar_base(phys_bar_base)
 		{ }
 
 		void reset()
@@ -199,12 +218,14 @@ class Virtio::Device
 			_control = 0u;
 			_status  = 1u << 20 /* cap list support */;
 
-			_bar0_size  = false;
-			_all_notify = false;
+			_bar0_size      = false;
+			_all_notify     = false;
+			_config_changed = false;
 
-			_feature_select = 0u;
-			_device_status  = 0u;
-			_queue_select   = 0u;
+			_feature_select    = 0u;
+			_device_status     = 0u;
+			_queue_select      = 0u;
+			_config_generation = 0u;
 
 			for (unsigned i = 0; i < QUEUES_MAX; i++) {
 				_queues[i].queue_size = VIRTIO_QUEUE_SIZE;
@@ -237,7 +258,7 @@ class Virtio::Device
 					break;
 				case 0x10: /* BAR 0 */
 					if (_bar0_size) {
-						msg.value = _phys_bar_size;
+						msg.value = PHYS_BAR_SIZE;
 						_bar0_size = false;
 					} else
 						msg.value = _phys_bar_base;
@@ -311,7 +332,7 @@ class Virtio::Device
 
 		bool receive(MessageMem &msg)
 		{
-			if (msg.phys < _phys_bar_base || _phys_bar_base + _phys_bar_size <= msg.phys)
+			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
 			unsigned const offset = msg.phys - _phys_bar_base;
@@ -361,7 +382,9 @@ class Virtio::Device
 				break;
 			case 0x14: /* device status (1), config gen (1), queue select (2) */
 				if (msg.read)
-					*msg.ptr = _device_status | (_queue_select << 16);
+					*msg.ptr = (unsigned(_device_status)) |
+					           (unsigned(config_generation()) << 8) |
+					           (unsigned(_queue_select) << 16);
 				else {
 					if ((*msg.ptr >> 16) < _queues_count) {
 						_device_status = *msg.ptr & 0xff;
@@ -380,7 +403,7 @@ class Virtio::Device
 				break;
 			case 0x1c: /* queue enable, queue notify offset */
 				if (msg.read) {
-					unsigned notify_offset = ((_queue_select + 1) << 16);
+					unsigned notify_offset = ((unsigned(_queue_select) + 1) << 16);
 					/* (notify_offset >> 16) * notify_off_multiplier -> notify PCI exit */
 					*msg.ptr = notify_offset | (queue().queue.enabled() ? 1u : 0u);
 				} else {
@@ -422,8 +445,10 @@ class Virtio::Device
 			case BAR_OFFSET_ISR:
 				if (msg.read) {
 					if (_status & (1 << 3)) {
-						/* 0x1 - queue interrupt, 0x2 configuration change (not supported by now) */
-						*msg.ptr = 0x1; /* read clears & deassert IRQ */
+						/* 0x1 - queue interrupt, 0x2 configuration change */
+						*msg.ptr = 0x1 | (_config_changed ? 0x2 : 0x0);
+
+						/* read clears & deassert IRQ */
 						_status &= ~(1u << 3);
 
 						MessageIrqLines msg(MessageIrq::DEASSERT_IRQ, _irq);

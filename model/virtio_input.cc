@@ -252,7 +252,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 
 		bool receive(MessageMem &msg)
 		{
-			if (msg.phys < _phys_bar_base || _phys_bar_base + _phys_bar_size <= msg.phys)
+			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
 			unsigned const offset = msg.phys - _phys_bar_base;
