@@ -224,8 +224,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 
 	public:
 
-		unsigned width  { };
-		unsigned height { };
+		unsigned res_x  { };
+		unsigned res_y { };
 
 		Virtio_input(DBus<MessageIrqLines>  &bus_irqlines,
 		             DBus<MessageMemRegion> &bus_memregion,
@@ -261,7 +261,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
 				if (msg.read)
 					*msg.ptr = _input_config.read(offset - BAR_OFFSET_CONFIG,
-					                              width, height);
+					                              res_x, res_y);
 				else
 					_input_config.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
 
@@ -384,6 +384,19 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			if (msg.device != _device)
 				return false;
 
+			bool ok = _receive(msg);
+			if (ok) {
+				msg.data  = res_x;
+				msg.data2 = res_y;
+			}
+			return ok;
+		}
+
+		bool _receive(MessageInput &msg)
+		{
+			if (msg.device != _device)
+				return false;
+
 			auto &queue = _queues[0];
 
 			if (!queue.queue.enabled())
@@ -457,8 +470,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 };
 
 PARAM_HANDLER(virtio_input,
-	      "virtio_input:bdf,irq - attach an virtio input to the PCI bus",
-	      "Example: 'virtio_input:,11'.",
+	      "virtio_input:bdf,irq,xmax,ymax - attach an virtio input to the PCI bus",
+	      "Example: 'virtio_input:,11,4096,4096'.",
 	      "If no bdf is given a free one is used.")
 {
 	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_memregion,
@@ -470,14 +483,8 @@ PARAM_HANDLER(virtio_input,
 	mb.bus_input .add(dev, Virtio_input::receive_static<MessageInput>);
 	mb.bus_bios  .add(dev, Virtio_input::receive_static<MessageBios>);
 
-	ConsoleModeInfo info { };
-	MessageConsole  msg(MessageConsole::TYPE_GET_MODEINFO, /* XXX VESA mode */ 0);
-	msg.index = 1; /* XXX */
-	msg.info  = &info;
-	mb.bus_console.send(msg);
+	dev->res_x = (argv[2] == ~0UL) ? 4 * 4096 : argv[2];
+	dev->res_y = (argv[3] == ~0UL) ? 4 * 4096 : argv[3];
 
-	dev->width  = info.resolution[0];
-	dev->height = info.resolution[1];
-
-	Logging::printf("virtio input width/height %ux%u\n", dev->width, dev->height);
+	Logging::printf("virtio input resolution %ux%u\n", dev->res_x, dev->res_y);
 }

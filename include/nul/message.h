@@ -408,6 +408,10 @@ struct MessageConsole
       TYPE_DEBUG,
       // content of vga/framebuffer changed by model
       TYPE_CONTENT_UPDATE,
+      // notification from VMM to model that modeinfo can be changed
+      TYPE_MODEINFO_UPDATE,
+      // notification from model to VMM that new resolution was chosen by VM
+      TYPE_RESOLUTION_CHANGE,
     } type;
   unsigned short id;
   unsigned short view;
