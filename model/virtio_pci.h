@@ -114,7 +114,8 @@ class Virtio::Device
 		uint32       _control   { 0 };
 		uint32       _status    { 1u << 20 /* cap list support */ };
 
-		uint32       _feature_select    { 0 };
+		uint32       _dev_feature_word  { 0 };
+		uint32       _drv_feature_word  { 0 };
 		uint8        _device_status     { 0 };
 		uint8        _config_generation { 0 };
 		uint16       _queue_select      { 0 };
@@ -181,7 +182,11 @@ class Virtio::Device
 			return uintptr_t(mem_region.ptr) + (req_addr - guest_base);
 		}
 
-		virtual void notify (unsigned) = 0;
+		virtual void   notify  (unsigned) = 0;
+
+		virtual uint32 dev_feature     (unsigned)         = 0;
+		virtual void   drv_feature_ack (unsigned, uint32) = 0;
+		virtual uint32 drv_feature     (unsigned)         = 0;
 
 		~Device() { }
 
@@ -222,7 +227,8 @@ class Virtio::Device
 			_all_notify     = false;
 			_config_changed = false;
 
-			_feature_select    = 0u;
+			_dev_feature_word  = 0u;
+			_drv_feature_word  = 0u;
 			_device_status     = 0u;
 			_queue_select      = 0u;
 			_config_generation = 0u;
@@ -362,19 +368,30 @@ class Virtio::Device
 			}
 
 			switch (offset) {
-			case 0x0: /* feature select */
+			case 0x0: /* device feature word select */
 				if (msg.read)
-					*msg.ptr = _feature_select;
+					*msg.ptr = _dev_feature_word;
 				else
-					_feature_select = *msg.ptr;
+					_dev_feature_word = *msg.ptr;
 				break;
-			case 0x4: /* features */
+			case 0x4: /* device feature word value */
 				if (msg.read) {
-					if (_feature_select == 1)
-						*msg.ptr = 1; /* VIRTIO_F_VERSION_1 (32) */
-					else
-						*msg.ptr = 0;
+					*msg.ptr = dev_feature(_dev_feature_word);
+					if (_dev_feature_word == 1)
+						*msg.ptr |= 1u; /* VIRTIO_F_VERSION_1 (32) */
 				}
+				break;
+			case 0x8: /* driver feature word select */
+				if (msg.read)
+					*msg.ptr = _drv_feature_word;
+				else
+					_drv_feature_word = *msg.ptr;
+				break;
+			case 0xc: /* driver feature word value */
+				if (msg.read)
+					*msg.ptr = drv_feature(_drv_feature_word);
+				else
+					drv_feature_ack(_drv_feature_word, *msg.ptr);
 				break;
 			case 0x10: /* msix config, num queues */
 				if (msg.read)

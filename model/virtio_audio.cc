@@ -717,6 +717,10 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			if (inject)
 				inject_irq();
 		}
+
+		uint32 dev_feature     (unsigned)         override { return 0u; }
+		void   drv_feature_ack (unsigned, uint32) override { }
+		uint32 drv_feature     (unsigned)         override { return 0u; }
 };
 
 size_t Virtio_sound::_jack_info(uintptr_t const in,  size_t const in_size,

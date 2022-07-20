@@ -467,6 +467,10 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			if (queue != 0)
 				Logging::printf("virtio_input: notify %u", queue);
 		}
+
+		uint32 dev_feature     (unsigned)         override { return 0u; }
+		void   drv_feature_ack (unsigned, uint32) override { }
+		uint32 drv_feature     (unsigned)         override { return 0u; }
 };
 
 PARAM_HANDLER(virtio_input,
