@@ -74,8 +74,7 @@ public:
       }
       else {
         unsigned short iret_frame[3];
-	unsigned stack_address = cpu->esp;
-	if (((cpu->ss.ar >> 10) & 1)==0) stack_address &= 0xffff;
+        auto const stack_address = cpu->ss.clamp_to_size_type(cpu->esp);
 	if (!_vcpu.copy_in(cpu->ss.base + stack_address, iret_frame, sizeof(iret_frame)))
 	  Logging::panic("can not copy in iret frame");
 	cpu->cs.sel = iret_frame[1];

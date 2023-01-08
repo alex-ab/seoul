@@ -156,7 +156,11 @@ protected:
   }
 
 
-  int init() {
+  int init()
+  {
+    #ifdef __x86_64__
+    _msr_efer    = READ(efer);
+    #endif
 
     _paging_mode = (READ(cr0) & 0x80010000) | (READ(cr4) & 0x30) | (_msr_efer & 0xc00);
 

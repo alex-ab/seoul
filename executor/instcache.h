@@ -34,6 +34,7 @@
 enum
   {
     RMTR_eip = MTD_RIP_LEN,
+    RMTR_ripx = MTD_RIP_LEN,
     RMTR_efl = MTD_RFLAGS,
     RMTR_cr0 = MTD_CR,
     RMTR_cr2 = MTD_CR,
@@ -41,6 +42,7 @@ enum
     RMTR_cr4 = MTD_CR,
     RMTR_cs  = MTD_CS_SS,
     RMTR_ss  = MTD_CS_SS,
+    RMTR_efer = MTD_EFER,
   };
 
 /**
@@ -78,6 +80,7 @@ static const unsigned short modrminfo[64] =
     0x36 | MRM_DIS08, 0x37 | MRM_DIS08, 0x56 | MRM_SS | MRM_DIS08, 0x57 | MRM_SS | MRM_DIS08, 0x06 | MRM_DIS08, 0x07 | MRM_DIS08, 0x50 | MRM_DIS08 | MRM_SS, 0x03 | MRM_DIS08,
     0x36 | MRM_DIS16, 0x37 | MRM_DIS16, 0x56 | MRM_SS | MRM_DIS16, 0x57 | MRM_SS | MRM_DIS16, 0x06 | MRM_DIS16, 0x07 | MRM_DIS16, 0x50 | MRM_DIS16 | MRM_SS, 0x03 | MRM_DIS16,
     MRM_EAX| MRM_REG, 0x01 | MRM_REG  , 0x02 | MRM_REG           , 0x03 | MRM_REG           , 0x04 | MRM_REG  , 0x05 | MRM_REG  , 0x06 | MRM_REG           , 0x07 | MRM_REG  ,
+
     MRM_EAX           , 0x01            , 0x02            , 0x03            , MRM_SIB           ,        MRM_DIS32         , 0x06            , 0x07            ,
     MRM_EAX| MRM_DIS08, 0x01 | MRM_DIS08, 0x02 | MRM_DIS08, 0x03 | MRM_DIS08, MRM_SIB| MRM_DIS08, 0x05 | MRM_DIS08 | MRM_SS, 0x06 | MRM_DIS08, 0x07 | MRM_DIS08,
     MRM_EAX| MRM_DIS32, 0x01 | MRM_DIS32, 0x02 | MRM_DIS32, 0x03 | MRM_DIS32, MRM_SIB| MRM_DIS32, 0x05 | MRM_DIS32 | MRM_SS, 0x06 | MRM_DIS32, 0x07 | MRM_DIS32,
@@ -103,12 +106,31 @@ struct InstructionCacheEntry
   unsigned operand_size;
   unsigned address_size;
   unsigned modrminfo;
-  unsigned cs_ar;
+  struct {
+    uint16 raw;
+
+    /* 1 - 16bit, 2 - 32bit, 3 - 64bit */
+    unsigned size_type() const
+    {
+      if (raw & (1u << 9)) return 3;
+      return (raw & (1u << 10)) ? 2 : 1;
+    }
+  } cs_ar;
+
   unsigned prefixes;
+
+  bool prefix_lock() { return (prefixes & 0xff) == 0xf0; }
+
+  /* REX prefix in 64bit 0100wrxb */
+  bool prefix_rex()  { return (cs_ar.size_type() == 3) && ((prefixes & 0xf0) == 0x40); }
+  bool reg64()       { return prefix_rex() && (prefixes & 0x4); /* REX.R */ }
+  bool rex_w()       { return prefix_rex() && (prefixes & 0x8); /* REX.W */ }
+  bool rex_b()       { return prefix_rex() && (prefixes & 0x1); /* REX.B */ }
+
   void __attribute__((regparm(3))) (*execute)(InstructionCache *instr, void *tmp_src, void *tmp_dst);
   void     *src;
   void     *dst;
-  unsigned immediate;
+  mword     immediate;
 };
 
 
@@ -164,8 +186,8 @@ class InstructionCache : public MemTlb
   // cpu state
   VCpu   * _vcpu;
   InstructionCacheEntry *_entry;
-  unsigned _oeip;
-  unsigned _oesp;
+  mword _oeip { };
+  mword _oesp { };
   unsigned _ointr_state;
   mword _dr6;
   mword _dr[4];
@@ -193,13 +215,25 @@ class InstructionCache : public MemTlb
    */
   int fetch_code(InstructionCacheEntry *entry, unsigned len)
   {
-    uintptr_t virt = READ(eip) + entry->inst_len;
-    unsigned limit = READ(cs).limit;
-    if ((~limit && limit < (virt + len - 1)) || ((entry->inst_len + len) > InstructionCacheEntry::MAX_INSTLEN)) GP0;
-    virt += READ(cs).base;
+    uintptr_t       virt  = READ(ripx) + entry->inst_len;
+    uintptr_t const limit = READ(cs).limit_type();
+    uintptr_t const base  = READ(cs).base;
+
+    if ((~limit && limit < (virt + len - 1)) || ((entry->inst_len + len) > InstructionCacheEntry::MAX_INSTLEN)) {
+      #ifdef __x86_64__
+        Logging::printf("GP0 in fetch code ... efer=%lx\n", READ(efer));
+      #endif
+      Logging::printf("GP0 in fetch_code virt %lx cs base/limit %lx/%lx\n", virt, base, limit);
+      GP0;
+    }
+
+    virt += base;
 
     read_code(virt, len, entry->data + entry->inst_len);
     entry->inst_len += len;
+
+    if (_fault)
+      Logging::printf("fetch code ... _fault=%x virt=%lx len=%x entry->inst_len=%x\n", _fault, virt, len, entry->inst_len);
     return _fault;
   }
 
@@ -210,8 +244,9 @@ class InstructionCache : public MemTlb
    */
   bool find_entry(unsigned long &index)
   {
-    unsigned cs_ar = READ(cs).ar;
-    auto const linear = _cpu->eip + READ(cs).base;
+    auto const cs_ar  = READ(cs).ar;
+    auto const linear = _cpu->ripx + READ(cs).base;
+
     for (auto i = slot(linear); i < slot(linear) + ASSOZ; i++)
       if (linear == _tags[i] &&  _values[i].inst_len)
 	{
@@ -221,7 +256,7 @@ class InstructionCache : public MemTlb
 	  if (fetch_code(&tmp, _values[i].inst_len)) return false;
 
 	  // either code modified or two entries with different bases?
-	  if (memcmp(tmp.data, _values[i].data, _values[i].inst_len) || cs_ar != _values[i].cs_ar)  continue;
+	  if (memcmp(tmp.data, _values[i].data, _values[i].inst_len) || cs_ar != _values[i].cs_ar.raw)  continue;
 	  index = i;
 	  //COUNTER_INC("I$ ok");
 	  return true;
@@ -229,7 +264,7 @@ class InstructionCache : public MemTlb
     // allocate new invalid entry
     index = slot(linear) + (_pos++ % ASSOZ);
     memset(_values + index, 0, sizeof(*_values));
-    _values[index].cs_ar =  cs_ar;
+    _values[index].cs_ar.raw = cs_ar;
     _values[index].prefixes = 0x8300; // default is to use the DS segment
     _tags[index] = linear;
     return false;
@@ -243,24 +278,44 @@ class InstructionCache : public MemTlb
   {
     fetch_code(_entry, 1);
     unsigned char  modrm = _entry->data[_entry->inst_len - 1];
-    unsigned short info = modrminfo[((_entry->address_size == 2) << 5) | ((modrm >> 3) & 0x18) | (modrm & 0x7)];
+
+    /*
+     * https://wiki.osdev.org/X86-64_Instruction_Encoding#ModR.2FM_and_SIB_bytes
+     *
+     * The first 32 entries of the modrminfo array are for 16bit.
+     * The next  32 entries of the modrminfo array are for 32bit and 64bit usable.
+     * For 64bit the rex.b (rex_b()) bit selects register r8-r15 instead of r0-r8.
+     */
+
+    unsigned short info = modrminfo[((!!((_entry->address_size >= 2))) << 5) |
+                                    ((modrm >> 3) & 0x18) | (modrm & 0x7)];
 
     // sib byte
-    if (info & MRM_SIB)
-      {
-	fetch_code(_entry, 1);
-	if ((modrm & 0xc7) == 0x4 && (_entry->data[_entry->inst_len - 1] & 0x7) == 5) info |= MRM_DIS32 | MRM_NOBASE;
-	info = static_cast<unsigned short>((info & ~0xff) | _entry->data[_entry->inst_len - 1]);
-	if (((info >> 3) & 0xf) == 4) info |= MRM_NOINDEX;
-	if (~info & MRM_NOBASE && ((info & 0xf) == 4 || (info & 0xf) == 5)) info |= MRM_SS;
-      }
+    if (info & MRM_SIB) {
+      fetch_code(_entry, 1);
+
+      if ((modrm & 0xc7) == 0x4 && (_entry->data[_entry->inst_len - 1] & 0x7) == 5)
+        info |= MRM_DIS32 | MRM_NOBASE;
+
+      info = static_cast<unsigned short>((info & ~0xff) | _entry->data[_entry->inst_len - 1]);
+
+      if (((info >> 3) & 0xf) == 4)
+        info |= MRM_NOINDEX;
+
+      if (~info & MRM_NOBASE && ((info & 0xf) == 4 || (info & 0xf) == 5))
+        info |= MRM_SS;
+    }
+
     unsigned disp = ((info >> MRM_DISSHIFT) & 0x3);
-    if (disp)  fetch_code(_entry, 1 << (disp-1));
+    if (disp)
+      fetch_code(_entry, 1 << (disp-1));
+
     _entry->modrminfo = info;
 
     // SS segment is default for this modrm?
     if (((_entry->prefixes & 0xff00) == 0x8300) && info & MRM_SS)
       _entry->prefixes = (_entry->prefixes & ~0xff00) | 0x200;
+
     return _fault;
   }
 
@@ -278,44 +333,134 @@ public:
   {
     //COUNTER_INC("INSTR");
     unsigned long index = 0;
-    if (!find_entry(index) && !_fault)
-      {
-	_entry = _values + index;
-	_entry->address_size = _entry->operand_size = ((_entry->cs_ar >> 10) & 1) + 1;
-	for (int op_mode = 0; !_entry->execute && !_fault; )
-	  {
-	    /**
-	     * Handle a new byte of the instruction.
-	     *
-	     * The op_mode, keeps track which parts of the opcode bytes have
-	     * already been seen.  Negative if the whole instruction is fetched.
-	     */
-	    fetch_code(_entry, 1) || handle_code_byte(_entry, _entry->data[_entry->inst_len-1], op_mode);
-	  }
-	if (_fault)
-	  {
-	    // invalidate entry
-	    _entry->inst_len = 0;
-	    Logging::printf("decode fault %x\n", _fault);
-	    return _fault;
-	  }
+    if (!find_entry(index) && !_fault) {
 
-	assert(_values[index].execute);
-	//COUNTER_INC("decoded");
+      _entry = _values + index;
+      _entry->address_size = _entry->operand_size = _entry->cs_ar.size_type();
+
+      /* in long mode the default operand size is 32bit */
+      if (_entry->cs_ar.size_type() == 3)
+        _entry->operand_size = 2;
+
+      for (int op_mode = 0; !_entry->execute && !_fault; )
+      {
+        /**
+         * Handle a new byte of the instruction.
+         *
+         * The op_mode, keeps track which parts of the opcode bytes have
+         * already been seen.  Negative if the whole instruction is fetched.
+         */
+
+        //fetch_code(_entry, 1) || handle_code_byte(_entry, _entry->data[_entry->inst_len-1], op_mode);
+
+        bool const error = fetch_code(_entry, 1);
+
+        if (!error) {
+          auto const instruction = _entry->data[_entry->inst_len - 1];
+
+          /*
+           * REX prefix in 64bit 0100wrxb
+           * - 0x40-0x4f (inc/dec) not available as in 32bit
+           */
+          bool const rex = (instruction & 0xf0) == 0x40;
+
+          if (mode_64() && (rex)) {
+
+            _entry->prefixes = instruction;
+
+            bool const prefix_66 = (instruction & 0xff) == 0x66;
+            bool const prefix_67 = (instruction & 0xff) == 0x67;
+
+			if (prefix_66 || prefix_67) {
+				Logging::printf("----------- ... A 66=%d 67=%d rip=%lx rex=%d ar.size_type()=%x operand_size=%u address_size=%u _entry=%p prefixes=%x\n",
+				                prefix_66, prefix_67, _cpu->ripx, rex, _entry->cs_ar.size_type(),
+				                _entry->operand_size, _entry->address_size, _entry, _entry->prefixes);
+			 }
+
+            if (_entry->rex_w())
+              _entry->operand_size = 3;
+
+            if (prefix_66 || prefix_67) {
+
+              assert(_entry->address_size == 3);
+//              if (_entry->rex_w()) /* force address size to 64bit */
+//                _entry->address_size = 3;
+
+              _entry->address_size = 2;
+
+              if (!_entry->rex_w())
+                _entry->operand_size = 1;
+
+              Logging::printf("... B 66=%d 67=%d rip=%lx rex=%d ar.size_type()=%x operand_size=%u address_size=%u _entry=%p prefixes=%x\n",
+                              prefix_66, prefix_67, _cpu->ripx, rex, _entry->cs_ar.size_type(),
+                              _entry->operand_size, _entry->address_size, _entry, _entry->prefixes);
+            }
+
+            continue;
+          }
+
+          handle_code_byte(_entry, instruction, op_mode);
+
+        }
       }
+
+      if (_fault) {
+        _entry->inst_len = 0;
+        Logging::printf("decode fault %x ip=%lx\n", _fault, _cpu->ripx);
+        return _fault;
+      }
+
+      assert(_values[index].execute);
+      //COUNTER_INC("decoded");
+    }
+
     _entry = _values + index;
-    _cpu->eip += _entry->inst_len;
-    if (debug) {
-	Logging::printf("eip %x:%x esp %x eax %x ebp %x prefix %x\n", _cpu->cs.sel, _oeip, _oesp, _cpu->eax, _cpu->ebp, _entry->prefixes);
+    _cpu->ripx += _entry->inst_len;
+
+    bool show = false;
+    if (mode_64() && _entry->inst_len != _cpu->inst_len)
+      show = true;
+
+
+    if (debug || show) {
+	Logging::printf("rip %x:%lx rsp %lx eax %x ebp %x prefix %x _fault=%x execute_ptr=%p inst_len=%u vs cpu->inst_len=%lu modrminfo=%x\n",
+	                _cpu->cs.sel, _oeip, _oesp, _cpu->eax, _cpu->ebp, _entry->prefixes, _fault,
+	                _values[index].execute, _entry->inst_len, _cpu->inst_len, _entry->modrminfo);
 	Logging::printf(".byte ");
 	for (unsigned i = 0; i < _entry->inst_len; i++)
 	    Logging::printf("0x%02x%c", _entry->data[i], (i == _entry->inst_len - 1) ? '\n' : ',');
       }
+
+
+//    if (_entry->inst_len != _cpu->inst_len)
+//      Logging::panic("inst_len does not match");
+
+    if (_entry->prefix_rex() && _entry->prefixes & 0x2 /* REX.X */) {
+      Logging::printf("REX prefix %x NOT IMPLEMENTED !!!!!!!!!!!!!!!!! ripx=%lx\n", _entry->prefixes, _cpu->ripx);
+      Logging::printf(".byte ");
+      for (unsigned i = 0; i < _entry->inst_len; i++)
+        Logging::printf("0x%02x%c", _entry->data[i], (i == _entry->inst_len - 1) ? '\n' : ',');
+      Logging::panic("implement me\n");
+    }
+
     return _fault;
   }
 
-  mword *get_reg32(unsigned reg)
+  bool mode_64()
   {
+#ifdef __x86_64__
+    return _cpu->efer & (1u << 10);
+#else
+    return false;
+#endif
+  }
+
+  mword *get_reg32(unsigned reg_raw)
+  {
+    auto const reg = (reg_raw & 0x7u) + (_entry->reg64() ? 8u : 0u);
+
+    if (mode_64() && reg != reg_raw)
+      Logging::printf("%s %u != %u (raw)\n", __func__, reg, reg_raw);
     return _cpu->gpr + reg;
   }
 
@@ -323,10 +468,15 @@ public:
    * Get a GPR.
    */
   template<bool bytereg>
-  void *get_reg(unsigned reg)
+  void *get_reg(unsigned reg_raw)
   {
+    auto const reg = (reg_raw & 0x7) + (_entry->reg64() ? 8 : 0);
+
+    if (mode_64() && bytereg && reg >= 4 && reg < 8)
+       Logging::printf("%s reg=%u + byte %u\n", __func__, (reg & 0x3), ((reg & 0x4) >> 2));
+
     void *res = _cpu->gpr + reg;
-    if (bytereg && reg >= 4 && reg < 8)
+    if (bytereg && reg >= 4 && reg < 8 /* sp, bp, si, di */)
       res = reinterpret_cast<char *>(_cpu->gpr+(reg & 0x3)) + ((reg & 0x4) >> 2);
     return res;
   }
@@ -335,36 +485,38 @@ public:
 
   unsigned long modrm2virt()
   {
-    unsigned short info = static_cast<unsigned short>(_entry->modrminfo);
-    unsigned long virt = 0;
-    unsigned char *disp_offset = _entry->data + _entry->offset_opcode + 1;
-    if (info & MRM_SIB)
-      {
-	// add base + scaled index
-	if (~info & MRM_NOBASE)   virt += _cpu->gpr[info & 0x7];
-	if (~info & MRM_NOINDEX)  virt += _cpu->gpr[(info >> 3) & 0x7] << ((info >> 6) & 0x3);
-	disp_offset++;
-      }
-    else
-      {
-	if (info & 0xf || info & MRM_EAX) virt += _cpu->gpr[info & 0x7];
-	if (info & 0xf0) virt += _cpu->gpr[(info >> 4) & 0x7];
-      }
+    auto          const info        = static_cast<unsigned short>(_entry->modrminfo);
+    auto                disp_offset = _entry->data + _entry->offset_opcode + 1;
+    unsigned      const gpr_r8_r15  = _entry->rex_b() ? 0x8 : 0;
+    unsigned long       virt        = 0;
+
+    if (info & MRM_SIB) {
+      // add base + scaled index
+      if (~info & MRM_NOBASE)   { virt += _cpu->gpr[gpr_r8_r15 + (info & 0x7)]; }
+      if (~info & MRM_NOINDEX)  { virt += _cpu->gpr[gpr_r8_r15 + ((info >> 3) & 0x7)] << ((info >> 6) & 0x3); }
+      disp_offset++;
+    } else {
+      if (info & 0xf || info & MRM_EAX) { virt += _cpu->gpr[gpr_r8_r15 + (info & 0x7)]; }
+      if (info & 0xf0) { virt += _cpu->gpr[gpr_r8_r15 + ((info >> 4) & 0x7)]; }
+    }
 
     unsigned disp = ((info >> MRM_DISSHIFT) & 0x3);
-    switch (disp)
-      {
+
+    switch (disp) {
+      case 0:  break;
       case 1:  virt += *reinterpret_cast<char  *>(disp_offset); break;
       case 2:  virt += *reinterpret_cast<short *>(disp_offset); break;
       case 3:  virt += *reinterpret_cast<int   *>(disp_offset); break;
       default:
-	break;
-      }
+        Logging::printf("unknown disp size %u - check me XXX\n", disp);
+        break;
+    }
 
     if (_entry->flags & IC_BITS) {
-      auto const bitofs = *get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
-      virt += (bitofs >> 3) & ~((1 << _entry->operand_size) - 1);
+      auto const bitofs = *get_reg32(_entry->data[_entry->offset_opcode] >> 3);
+      virt += (bitofs >> 3) & ~((1ul << _entry->operand_size) - 1);
     }
+
     return virt;
   }
 
@@ -384,7 +536,7 @@ public:
   {
     auto const info = _entry->modrminfo;
     if (info & MRM_REG)
-	res = length == 1 ? get_reg<1>(info & 0x7) : get_reg<0>(info & 0x7);
+      res = (length == 1) ? get_reg<1>(info) : get_reg<0>(info);
     else
       virt_to_ptr(res, length, type, modrm2virt());
     return _fault;
@@ -394,7 +546,7 @@ public:
 #    define PARAM1       "=D"
 #    define PARAM2       "=S"
 #    define PARAM3       "=d"
-#    define CLOBBER      "memory", "eax", "ecx"
+#    define CLOBBER      "memory", "rax", "rcx"
 #else
 #    define PARAM1       "=a"
 #    define PARAM2       "=d"
@@ -405,7 +557,7 @@ public:
   void call_asm(void *tmp_src, void *tmp_dst)
   {
     mword tmp_flag;
-    unsigned dummy1, dummy2, dummy3;
+    mword dummy1, dummy2, dummy3;
     switch (_entry->flags & (IC_LOADFLAGS | IC_SAVEFLAGS))
       {
       case IC_SAVEFLAGS:
@@ -450,8 +602,8 @@ public:
     void *tmp_src   = _entry->src;
     void *tmp_dst   = _entry->dst;
 
-    if (((_entry->prefixes & 0xff) == 0xf0) && ((~_entry->flags & IC_LOCK) || (_entry->modrminfo & MRM_REG))) {
-      Logging::panic("LOCK prefix %02x%02x%02x%02x at eip %x:%x\n", _entry->data[0], _entry->data[1], _entry->data[2], _entry->data[3], _cpu->cs.sel, _cpu->eip);
+    if (_entry->prefix_lock() && ((~_entry->flags & IC_LOCK) || (_entry->modrminfo & MRM_REG))) {
+      Logging::panic("LOCK prefix %02x%02x%02x%02x at rip %x:%lx\n", _entry->data[0], _entry->data[1], _entry->data[2], _entry->data[3], _cpu->cs.sel, _cpu->ripx);
       UD0;
     }
 
@@ -464,7 +616,7 @@ public:
       }
     if (_entry->flags & IC_MOFS)
       {
-	unsigned virt = 0;
+	uintptr_t virt = 0;
 	move(&virt, _entry->data+_entry->offset_opcode, _entry->address_size);
 	if (virt_to_ptr(tmp_dst, length, type, virt)) return _fault;
       }
@@ -504,38 +656,35 @@ public:
     if (_cpu->intr_state != _ointr_state)
       _mtr_out |= MTD_STATE;
 
-    if (!_fault || _fault == FAULT_RETRY)
-      {
-	// successfull
-	_mtr_out |= MTD_RIP_LEN | MTD_GPR_ACDB | MTD_GPR_BSD;
-	if (_cpu->esp != _oesp) _mtr_out |= MTD_RSP;
+    if (!_fault || _fault == FAULT_RETRY) {
+      /* success */
+      _mtr_out |= MTD_RIP_LEN | MTD_GPR_ACDB | MTD_R8_R15 | MTD_GPR_BSD;
+      if (_cpu->rspx != _oesp) _mtr_out |= MTD_RSP;
 
-	// XXX bugs?
-	_mtr_out |= _mtr_in & ~(MTD_CR | MTD_TSC);
-      }
-    else
-      {
-	_cpu->eip = _oeip;
+      // XXX bugs?
+      _mtr_out |= _mtr_in & ~(MTD_CR | MTD_TSC);
+    } else {
+	_cpu->ripx = _oeip;
 	if (~_fault & 0x80000000)
 	  {
 	    if (_entry)  _cpu->inst_len = _entry->inst_len; else _cpu->inst_len = 0;
 	    switch (_fault)
 	      {
 	      case FAULT_UNIMPLEMENTED:
-		Logging::panic("unimplemented at line %d eip %x\n", _debug_fault_line, _cpu->eip);
+		Logging::panic("unimplemented at line %d rip %lx\n", _debug_fault_line, _cpu->ripx);
 		// unimplemented
 		return false;
 	      default:
-		Logging::panic("internal fault %x at eip %x\n", _fault, _cpu->eip);
+		Logging::panic("internal fault %x at rip %lx\n", _fault, _cpu->ripx);
 	      }
 	  }
 	else
 	  {
 	    _mtr_out |= MTD_INJ;
 
-	    if (_fault != 0x80000b0eu) /* don't show message for page fault */
-	      Logging::printf("fault: %x old %x error %x cr2 %zx at eip %x line %d %zx\n", _fault, _cpu->inj_info,
-			      _error_code, size_t(_cpu->cr2), _cpu->eip, _debug_fault_line, size_t(_cpu->cr2));
+//	    if (_fault != 0x80000b0eu) /* don't show message for page fault */
+	      Logging::printf("fault: %x old %x error %x cr2 %lx at rip %lx line %d\n", _fault, _cpu->inj_info,
+			      _error_code, _cpu->cr2, _cpu->ripx, _debug_fault_line);
 	    // consolidate two exceptions
 
 	    // triple fault ?
@@ -573,16 +722,21 @@ public:
     _fault = 0;
     if (!init()) {
       _entry = 0;
-      _oeip = _cpu->eip;
-      _oesp = _cpu->esp;
+      _oeip = _cpu->ripx;
+      _oesp = _cpu->rspx;
       _ointr_state = _cpu->intr_state;
       // remove sti+movss blocking
       _cpu->intr_state &= ~3;
+
       event_injection() || get_instruction() || execute();
+
       if (commit()) invalidate(true);
+    } else {
+      /* commit init() _fault */
+      commit();
     }
     msg.mtr_out = _mtr_out;
   }
 
- InstructionCache(VCpu *vcpu) : MemTlb(vcpu->mem, vcpu->memregion), _pos(), _tags(), _values(), _vcpu(vcpu), _entry(), _oeip(), _oesp(), _ointr_state(), _dr6(), _dr(), _fpustate() { }
+ InstructionCache(VCpu *vcpu) : MemTlb(vcpu->mem, vcpu->memregion), _pos(), _tags(), _values(), _vcpu(vcpu), _entry(), _ointr_state(), _dr6(), _dr(), _fpustate() { }
 };

@@ -125,14 +125,24 @@ def get_encoding(opcode, file, fdict):
 
 
 def filter_chars(snippet, op_size, flags):
-	for m,n in [("[os]", "%d"%op_size), ("[data16]", op_size == 1 and "data16" or ""),
-	            ("[bwl]", "bwl"[op_size]), ("[qrr]", "qrr"[op_size]), ("[lock]", "LOCK" in flags and "lock" or ""),
-	            ("[EAX]", ("%%al","%%ax", "%%eax")[op_size]),
-	            ("[EDX]", ("%%dl","%%dx", "%%edx")[op_size]),
+	for m,n in [("[os]", "%d"%op_size),
+	            ("[data16]", op_size == 1 and "data16" or ""),
+	            ("[bwl]", "bwlq"[op_size]),
+	            ("[qrr]", "qrrr"[op_size]),
+	            ("[lock]", "LOCK" in flags and "lock" or ""),
+	            ("[EAX]", ("%%al","%%ax", "%%eax", "%%rax")[op_size]),
+	            ("[EDX]", ("%%dl","%%dx", "%%edx", "%%rdx")[op_size]),
 	            ("[IMM]", list(filter(lambda x: x in ["IMM1", "IMM2", "IMMO", "CONST1"], flags)) and "1" or "0"),
 	            ("[OP1]", "OP1" in flags and "1" or "0"),
 	            ("[IMMU]", "IMM1" in flags and "unsigned char" or "unsigned")]:
 		snippet = list(map(lambda x: x.replace(m, n), snippet))
+
+	if op_size == 3:
+		snippet.insert(0, '\n#ifdef __x86_64__\n')
+		snippet.append('\n#else\n')
+		snippet.append('\n	Logging::panic("op_size in 32bit host not supported")')
+		snippet.append('\n#endif\n')
+
 	return snippet
 
 
@@ -161,6 +171,7 @@ def generate_functions(name, flags, snippet, enc, functions, l2, tab):
 	imm = "; entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
 	additions = [("MEMONLY", indenting+"if (~entry->modrminfo & MRM_REG) {"),
 	             ("REGONLY", indenting+"if (entry->modrminfo & MRM_REG) {"),
+	             ("OS3CHK",  indenting+"if (mode_64()) entry->operand_size = 3"),
 	             ("OS2",     indenting+"entry->operand_size = 2"),
 	             ("OS1",     indenting+"entry->operand_size = 1"),
 	             ("CONST1",  indenting+"entry->immediate = 1" + imm),
@@ -170,7 +181,7 @@ def generate_functions(name, flags, snippet, enc, functions, l2, tab):
 	             ("IMMO",    indenting+imm),
 	             ("MOFS",    indenting+"fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
 	             ("LONGJMP", indenting+"fetch_code(entry, 2 + (1 << entry->operand_size))"),
-	             ("IMPL",    indenting+"entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
+	             ("IMPL",    indenting+"entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1])"%("BYTE" in flags)),
 	             ("ECX",     indenting+"entry->src = &_cpu->ecx"),
 	             ("EDX",     indenting+"entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
 	             ("EAX",     indenting+"entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
@@ -192,20 +203,24 @@ def generate_functions(name, flags, snippet, enc, functions, l2, tab):
 
 	# operand size loop
 	s = ""
-	for op_size in range(3):
+	for op_size in range(4):
 		no_os = ("BYTE" in flags or "NO_OS" in flags) and "HAS_OS" not in flags
 		if no_os or op_size > 0:
 			s += extra_if_indent
-			s += op_size == 1 and "if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
+			s += (op_size == 1 and "if (entry->operand_size == 1) {\n" or
+			      op_size == 2 and " else if (entry->operand_size == 2) {\n" or
+			      op_size == 3 and " else {\n" or "{\n")
+
 			if "IMMO"   in flags:
 				s += extra_if_indent
-				s += "fetch_code(entry, %d);"%(1 << op_size)
+				s += "fetch_code(entry, %d);\n"%(1 << op_size)
 				s += extra_if_indent
-				s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);"  or
-				      op_size == 2 and "entry->immediate = *reinterpret_cast<int   *>(entry->data+entry->inst_len - 4);")
+				s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);\n"  or
+				      op_size == 2 and "entry->immediate = *reinterpret_cast<int   *>(entry->data+entry->inst_len - 4);\n"  or
+				      op_size == 3 and "entry->immediate = *reinterpret_cast<long  *>(entry->data+entry->inst_len - 8);\n")
 			funcname = "exec_%s_%s_%d"%("".join(enc), functools.reduce(lambda x,y: x.replace(y, "_"), "% ,.()", name), op_size)
 			s += extra_if_indent
-			s += "entry->execute = %s; }"%funcname
+			s += "	entry->execute = %s; }"%funcname
 			functions[funcname] = filter_chars(snippet, op_size, flags)
 			if no_os: break
 
@@ -248,7 +263,7 @@ def generate_code(encodings):
 				if "MODRM"  in flags:
 					l2.append("get_modrm()")
 					if "GRP" not in flags:
-						l2.append("entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
+						l2.append("entry->%s = get_reg<%d>(entry->data[entry->offset_opcode] >> 3)"%("src", "BYTE" in flags))
 
 				if l == len(enc) - 2:
 					#override p[key] if former same instruction was shorter, e.g d3 and later d3 00
@@ -344,8 +359,8 @@ segment_list = ["es", "cs", "ss", "ds", "fs", "gs"]
 opcodes += [(x, ["PREFIX"], ["entry->prefixes = (entry->prefixes & ~0xff00) | (%d << 8)"%segment_list.index(x)]) for x in segment_list]
 opcodes += [(x, ["PREFIX"], ["entry->prefixes = (entry->prefixes & ~(%#x)) | (code << %d)"%(0xff<<(8*(y-1)), (8*(y-1)))])
 	    for x,y in [("lock", 1) ,("repz", 1) , ("repnz", 1), ("data16", 3), ("addr16", 4)]]
-opcodes[-2] = (opcodes[-2][0], opcodes[-2][1], opcodes[-2][2]+["entry->operand_size = (((entry->cs_ar >> 10) & 1) + 1) ^ 3"])
-opcodes[-1] = (opcodes[-1][0], opcodes[-1][1], opcodes[-1][2]+["entry->address_size = (((entry->cs_ar >> 10) & 1) + 1) ^ 3"])
+opcodes[-2] = (opcodes[-2][0], opcodes[-2][1], opcodes[-2][2]+["entry->operand_size = (entry->cs_ar.size_type()) ^ 3"])
+opcodes[-1] = (opcodes[-1][0], opcodes[-1][1], opcodes[-1][2]+["entry->address_size = (entry->cs_ar.size_type()) ^ 3"])
 opcodes += [
     ("clc",   ["NO_OS"], ["cache->_cpu->efl &= ~1"]),
     ("cmc",   ["NO_OS"], ["cache->_cpu->efl ^=  1"]),
@@ -361,7 +376,7 @@ opcodes += [
     ("smsw",  ["NO_OS", "OS1"], ["move<1>(tmp_dst, &cache->_cpu->cr0)"]),
     ("nopl (%eax)",  ["NO_OS", "SKIPMODRM", "MODRM", "DROP1"], [" "]),
     ("lahf",  ["NO_OS"], ["cache->_cpu->ah = static_cast<unsigned char>((cache->_cpu->efl & 0xd5) | 2)"]),
-    ("sahf",  ["NO_OS"], ["cache->_cpu->efl = (cache->_cpu->efl & ~0xd5) | (cache->_cpu->ah  & 0xd5)"]),
+    ("sahf",  ["NO_OS"], ["cache->_cpu->efl = (cache->_cpu->efl & ~0xd5) | unsigned(cache->_cpu->ah & 0xd5)"]),
     ("clflush", ["ASM", "BYTE"], [""]),
     ]
 opcodes += [(x, ["ASM", "EAX", "NO_OS", x in ["aaa", "aas"] and "LOADFLAGS", "SAVEFLAGS"],
@@ -393,7 +408,7 @@ for i in range(len(ccflags)):
 		  'asm volatile ("j%s 1f;call %%P0; 1:" : : "ic"(foo))'%(ccflags[i ^ 1])])]
 opcodes += [(x, [x[-1] == "b" and "BYTE", "HAS_OS"], [
             "unsigned dummy = 0",
-	    "\n	tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+	    "\n	tmp_dst = cache->get_reg32(cache->_entry->data[cache->_entry->offset_opcode] >> 3)",
 	    """\n	asm volatile("movl (%%2), %%0; [data16] %s (%%1), %%0; mov %%0, (%%2)" : "=a"(dummy), "+d"(tmp_src), "+c"(tmp_dst))"""%x])
 	    for x in ["movzxb", "movzxw", "movsxb", "movsxw"]]
 
@@ -413,7 +428,7 @@ add_helper(["pop"],                                              [], "tmp_dst")
 add_helper(["lea", "lgdt", "lidt"],                              ["MEMONLY", "DIRECTION", "SKIPMODRM"], "")
 add_helper(["sgdt", "sidt"],                                     ["MEMONLY", "SKIPMODRM"], "")
 
-add_helper(["mov %cr0,%edx", "mov %edx,%cr0"],                   ["MODRM", "DROP1", "REGONLY", "NO_OS", "CPL0"], "")
+add_helper(["mov %cr0,%edx", "mov %edx,%cr0"],                   ["OS3CHK", "MODRM", "DROP1", "REGONLY", "NO_OS", "CPL0"], "")
 add_helper(["ltr", "lldt"],                                      ["NO_OS", "OS1", "DIRECTION"], "*reinterpret_cast<unsigned short *>(tmp_src)")
 add_helper(["lmsw"],                                             ["NO_OS", "OS1", "DIRECTION", "CPL0"], "*reinterpret_cast<unsigned short *>(tmp_src)")
 add_helper(["enter"],                                            [], "reinterpret_cast<unsigned *>(tmp_src)")
@@ -445,15 +460,15 @@ opcodes += [(x, ["DIRECTION"], [
 	    "\n	cache->_cpu->eax = eax",
 	    "\n	cache->_cpu->edx = edx",
 	    ]) for x in ["div", "idiv", "mul"]]
-opcodes += [(x, ["RMW"], ["unsigned count = 0",
+opcodes += [(x, ["RMW"], ["unsigned long count = 0",
 			    "\n	if ([IMM]) count = cache->_entry->immediate; else count = cache->_cpu->ecx",
-			    "\n	tmp_src = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+			    "\n	tmp_src = cache->get_reg32(cache->_entry->data[cache->_entry->offset_opcode] >> 3)",
 			    '\n	asm volatile ("xchg %%\" VMM_EXPAND(VMM_REG(ax)) \", %%\" VMM_EXPAND(VMM_REG(cx)) \"; mov (%%\" VMM_EXPAND(VMM_REG(dx)) \"), %%edx; [data16] '+
 			    x+' %%cl, %%\" VMM_EXPAND(VMM_REG(dx)) \", (%%\" VMM_EXPAND(VMM_REG(ax)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(ax))  : "+a"(count), "+d"(tmp_src), "+c"(tmp_dst))',
-			    "\n	cache->_cpu->efl = (cache->_cpu->efl & ~0x8d5) | (count  & 0x8d5)"])
+			    "\n	cache->_cpu->efl = (cache->_cpu->efl & ~0x8d5) | unsigned(count  & 0x8d5)"])
 	    for x in ["shrd", "shld"]]
-opcodes += [("imul", ["DIRECTION"], ["unsigned param = 0, result = 0",
-				 "\n	tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+opcodes += [("imul", ["DIRECTION"], ["unsigned long param = 0, result = 0",
+				 "\n	tmp_dst = cache->get_reg32(cache->_entry->data[cache->_entry->offset_opcode] >> 3)",
 				 "\n	if ([IMM]) param = cache->_entry->immediate; else if ([OP1]) param = cache->_cpu->eax; else move<[os]>(&param, tmp_dst);",
 				 # 'Logging::printf("IMUL %x * %x\\n", param, *reinterpret_cast<unsigned *>(tmp_src))',
 				 '\n	asm volatile ("imul[bwl] (%%\" VMM_EXPAND(VMM_REG(cx)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(cx))  : "+a"(param), "=d"(result), "+c"(tmp_src))',

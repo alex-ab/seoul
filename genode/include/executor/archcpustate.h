@@ -3,8 +3,9 @@
  *
  * Copyright (C) 2008, Udo Steinberg <udo@hypervisor.org>
  * Copyright (C) 2008-2010, Bernhard Kauer <bk@vmmon.org>
- * Copyright (C) 2011, Alexander Boettcher <ab764283@os.inf.tu-dresden.de>
+ * Copyright (C) 2011, Alexander Boettcher
  * Copyright (C) 2012, Julian Stecklina <jsteckli@os.inf.tu-dresden.de>
+ * Copyright (C) 2023, Alexander Boettcher <alexander.boettcher@genode-labs.com>
  * Economic rights: Technische Universitaet Dresden (Germany)
  *
  * This file is part of Seoul.
@@ -44,8 +45,11 @@ enum {
   MTD_INJ             = 1ul << 17,
   MTD_STATE           = 1ul << 18,
   MTD_TSC             = 1ul << 19,
+  MTD_EFER            = 1ul << 20,
+  MTD_R8_R15          = 1ul << 22,
+  MTD_SYSCALL_SWAPGS  = 1ul << 23,
   MTD_IRQ             = MTD_RFLAGS | MTD_STATE | MTD_INJ | MTD_TSC,
-  MTD_ALL             = (~0U >> 12) & ~MTD_CTRL
+  MTD_ALL             = (0x000fffffu & ~MTD_CTRL) | MTD_EFER | MTD_R8_R15 | MTD_SYSCALL_SWAPGS
 };
 
 enum {

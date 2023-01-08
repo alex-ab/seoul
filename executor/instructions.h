@@ -92,7 +92,7 @@ int helper_STI() {
 template<unsigned operand_size>
 void __attribute__((regparm(3)))  helper_LEA()
 {
-  mword *tmp_dst = get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
+  mword *tmp_dst = get_reg32(_entry->data[_entry->offset_opcode] >> 3);
   auto virt = modrm2virt();
   move<operand_size>(tmp_dst, &virt);
 }
@@ -112,6 +112,6 @@ int helper_loadsegment(CpuState::Descriptor *desc)
   move<1>(&sel, reinterpret_cast<char *>(addr) + (1 << operand_size));
 
   if (!set_segment(desc, sel))
-    move<operand_size>(get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7), addr);
+    move<operand_size>(get_reg32(_entry->data[_entry->offset_opcode] >> 3), addr);
   return _fault;
 }
