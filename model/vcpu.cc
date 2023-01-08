@@ -107,6 +107,30 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     msg.mtr_out |= MTD_GPR_ACDB;
   }
 
+  enum {
+    IA32_PLATFORM_ID     = 0x17,
+    IA32_FEATURE_CONTROL = 0x3a,
+    IA32_BIOS_SIGN_ID    = 0x8b,
+    /* should be solely available if CPUID.0AH: EAX[15:8] > PMC_nr (0, 1, ..) */
+    IA32_PMC0            = 0xc1,
+    IA32_PMC1            = 0xc2,
+    /* Linux seems to not care about PCM0/1 detection ? */
+    IA32_MTRRCAP         = 0xfe,
+    MISC_FEATURE_ENABLES = 0x140,
+    IA32_PERFEVTSEL0     = 0x186,
+    IA32_PERFEVTSEL1     = 0x187,
+
+    MSR_AMD64_DE_CFG     = 0xc0011029,
+
+    MSR_K7_EVNTSEL0      = 0xc0010000,
+    MSR_K7_PERFCTR0      = 0xc0010004,
+    MSR_K7_EVNTSEL1      = 0xc0010001,
+    MSR_K7_PERFCTR1      = 0xc0010005,
+    MSR_K7_EVNTSEL2      = 0xc0010002,
+    MSR_K7_PERFCTR2      = 0xc0010006,
+    MSR_K7_EVNTSEL3      = 0xc0010003,
+    MSR_K7_PERFCTR3      = 0xc0010007,
+  };
 
   void handle_rdmsr(CpuMessage &msg) {
     switch (msg.cpu->ecx) {
@@ -117,17 +141,61 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       assert(msg.mtr_in & MTD_SYSENTER);
       msg.cpu->edx_eax((&msg.cpu->sysenter_cs)[msg.cpu->ecx - 0x174]);
       break;
+    case IA32_PLATFORM_ID: /* tinycore 64bit */
     case 0x48: // IA32_SPEC_CTRL - speculation control
-    case 0x8b: // microcode
-      // MTRRs
-    case 0xfe:
-    case 0x122: // IA32_TSX_CTRL
+    case IA32_PMC0:
+    case IA32_PMC1:
+    case 0xce: /* MSR_PLATFORM_INFO */
+    case IA32_MTRRCAP:
+    case 0x122: /* IA32_TSX_CTRL */
+    case MISC_FEATURE_ENABLES: /* user mode monitor+mwait - not supported */
     case 0x179: /* MCG CAP */
+    case IA32_PERFEVTSEL0:
+    case IA32_PERFEVTSEL1:
     case 0x250:
     case 0x258:
     case 0x259:
     case 0x268 ... 0x26f:
     case 0x2ff:
+      msg.cpu->edx_eax(0);
+      break;
+    case 0x277:
+      dprintf("IA32_PAT_MSR rdmsr %x at %x\n",  msg.cpu->ecx, msg.cpu->eip);
+      msg.cpu->edx_eax(0x0007040600070406ull);
+      break;
+    case IA32_BIOS_SIGN_ID:
+      msg.cpu->edx_eax(~0ull);
+      break;
+    case IA32_FEATURE_CONTROL: 
+      msg.cpu->edx_eax(1 /* lock bit set -> further wrmsr not permitted */);
+      break;
+#ifdef __x86_64__
+    case 0xc0000080:
+      assert(msg.mtr_in & MTD_EFER);
+      msg.cpu->edx_eax(msg.cpu->efer);
+      break;
+    case 0xc0000100:
+      assert(msg.mtr_in & MTD_FS_GS);
+      msg.cpu->edx_eax(msg.cpu->fs.base);
+      break;
+    case 0xc0000101:
+      assert(msg.mtr_in & MTD_FS_GS);
+      msg.cpu->edx_eax(msg.cpu->gs.base);
+      break;
+    case 0xc0000102:
+      assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+      msg.cpu->edx_eax(msg.cpu->kernel_gs);
+      break;
+#endif
+    case MSR_AMD64_DE_CFG:
+    case MSR_K7_EVNTSEL0:
+    case MSR_K7_PERFCTR0:
+    case MSR_K7_EVNTSEL1:
+    case MSR_K7_PERFCTR1:
+    case MSR_K7_EVNTSEL2:
+    case MSR_K7_PERFCTR2:
+    case MSR_K7_EVNTSEL3:
+    case MSR_K7_PERFCTR3:
       msg.cpu->edx_eax(0);
       break;
     default:
@@ -139,33 +207,122 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
   }
 
 
-  void handle_wrmsr(CpuMessage &msg) {
+  void handle_wrmsr(CpuMessage &msg)
+  {
     CpuState *cpu = msg.cpu;
+
     switch (cpu->ecx)
       {
       case 0x10:
-	assert(msg.mtr_in & MTD_TSC);
+        assert(msg.mtr_in & MTD_TSC);
         {
           long long offset    = get_tsc_off(msg);
 
           msg.current_tsc_off = - Cpu::rdtsc()        + cpu->edx_eax();
           cpu->tsc_off        =   msg.current_tsc_off - offset;
         }
-	msg.mtr_out |= MTD_TSC;
-	break;
+        msg.mtr_out |= MTD_TSC;
+        break;
+      case IA32_BIOS_SIGN_ID:
+        break;
+      case IA32_PMC0:
+      case IA32_PMC1:
+        break;
+      case MISC_FEATURE_ENABLES: /* user mode monitor+mwait - not supported */
+        break;
+
       case 0x174 ... 0x176:
-	(&cpu->sysenter_cs)[cpu->ecx - 0x174] = uintptr_t(cpu->edx_eax());
-	msg.mtr_out |= MTD_SYSENTER;
-	break;
+        (&cpu->sysenter_cs)[cpu->ecx - 0x174] = uintptr_t(cpu->edx_eax());
+        msg.mtr_out |= MTD_SYSENTER;
+        break;
       case 0x1d9: /* debug ctl - unsupported */
         dprintf("unsupported wrmsr debug ctl\n");
         break;
+#ifdef __x86_64__
+      case 0xc0000080:
+        /* Bit 1-7 reserved, Bit 9 reserved */
+        /* Intel: 12-63 bit reserved, AMD: 16-63 bit reserved */
+        /* non masking out leads to SMP Linux early bootstrap issue */
+        cpu->efer    = msg.cpu->edx_eax();
+        if (amd_cpu())
+          cpu->efer &= 0xfd01ull;
+        else
+          cpu->efer &= 0x0d01ull;
+
+        msg.mtr_out |= MTD_EFER;
+        break;
+      case 0xc0000081:
+        cpu->star    = msg.cpu->edx_eax();
+        msg.mtr_out |= MTD_SYSCALL_SWAPGS;
+        assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+        break;
+      case 0xc0000082:
+        cpu->lstar   = msg.cpu->edx_eax();
+        msg.mtr_out |= MTD_SYSCALL_SWAPGS;
+        assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+        break;
+      case 0xc0000083:
+        cpu->cstar   = msg.cpu->edx_eax();
+        msg.mtr_out |= MTD_SYSCALL_SWAPGS;
+        assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+        break;
+      case 0xc0000084:
+        cpu->fmask   = msg.cpu->edx_eax();
+        msg.mtr_out |= MTD_SYSCALL_SWAPGS;
+        assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+        break;
+      case 0xc0000100:
+        cpu->fs.base  = msg.cpu->edx_eax();
+        msg.mtr_out  |= MTD_FS_GS;
+        assert(msg.mtr_in & MTD_FS_GS);
+        break;
+      case 0xc0000101:
+        cpu->gs.base  = msg.cpu->edx_eax();
+        msg.mtr_out  |= MTD_FS_GS;
+        assert(msg.mtr_in & MTD_FS_GS);
+        break;
+      case 0xc0000102:
+        cpu->kernel_gs  = msg.cpu->edx_eax();
+        msg.mtr_out    |= MTD_SYSCALL_SWAPGS;
+        assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
+        break;
+#endif
+      case MSR_AMD64_DE_CFG:
+      case MSR_K7_EVNTSEL0:
+      case MSR_K7_PERFCTR0:
+      case MSR_K7_EVNTSEL1:
+      case MSR_K7_PERFCTR1:
+      case MSR_K7_EVNTSEL2:
+      case MSR_K7_PERFCTR2:
+      case MSR_K7_EVNTSEL3:
+      case MSR_K7_PERFCTR3:
+        break;
       default:
-	dprintf("unsupported wrmsr %x <-(%x:%x) at %x\n",  cpu->ecx, cpu->edx, cpu->eax, cpu->eip);
-	GP0(msg);
+        dprintf("unsupported wrmsr %x <-(%x:%x) at %lx\n",
+                cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
+        GP0(msg);
       }
   }
 
+  bool amd_cpu() const
+  {
+    unsigned const reg { };
+    unsigned eax { }, ebx { }, ecx { }, edx { };
+
+    char const amd_string [] = "AuthenticAMD";
+
+    CPUID_read(reg | 0, eax);
+    CPUID_read(reg | 1, ebx);
+    CPUID_read(reg | 2, ecx);
+    CPUID_read(reg | 3, edx);
+
+    if (*reinterpret_cast<uint32 const *>(amd_string + 0) == ebx &&
+        *reinterpret_cast<uint32 const *>(amd_string + 4) == edx &&
+        *reinterpret_cast<uint32 const *>(amd_string + 8) == ecx)
+        return true;
+
+    return false;
+  }
 
   void handle_cpu_init(CpuMessage &msg, bool reset) {
     CpuState *cpu = msg.cpu;
@@ -185,7 +342,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     cpu->cs.sel   = 0xf000;
     cpu->ss.ar    = 0x93;
     cpu->edx      = 0x600;
-    cpu->ds.ar = cpu->es.ar = cpu->fs.ar = cpu->gs.ar = cpu->ss.ar;
+    cpu->ds.ar    = cpu->es.ar = cpu->fs.ar = cpu->gs.ar = cpu->ss.ar;
     cpu->ld.ar    = 0x1000;
     cpu->tr.ar    = 0x8b;
     cpu->ss.limit = cpu->ds.limit = cpu->es.limit = cpu->fs.limit = cpu->gs.limit = cpu->cs.limit;
@@ -193,6 +350,17 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     /*cpu->dr6      = 0xffff0ff0;*/
     // cpu->_dr = {0, 0, 0, 0};
     cpu->dr7      = 0x400;
+
+#ifdef __x86_64__
+    if (amd_cpu()) {
+      /*
+       * AMD-V spec. 15.5.1 Basic Operation -> Canonicalization and Consistency Checks
+       * SVME must be set
+       */
+      cpu->efer = 1UL << 12;
+    }
+#endif
+
     msg.mtr_out  |= MTD_ALL;
     if (reset) {
       Logging::printf("reset CPU from %x mtr_in %x\n", msg.type, msg.mtr_in);
@@ -261,7 +429,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     // SIPI received?
     if (old_event & EVENT_SIPI) {
-      cpu->eip          = 0;
+      cpu->rip          = 0;
       cpu->cs.sel       = _sipi & 0xff00;
       cpu->cs.base      = cpu->cs.sel << 4;
       cpu->actv_state   = 0;
@@ -372,13 +540,15 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       _sipi = 0;
 
 
-    if ((value & EVENT_MASK) == EVENT_SIPI)
+    if ((value & EVENT_MASK) == EVENT_SIPI) {
       /**
        * try to claim the SIPI field, if it is empty, we are waiting
        * for a SIPI. If it fails, somebody else was faster and we do
        * not wakeup the client.
        */
-      if (Cpu::cmpxchg4b(&_sipi, 0, value)) return;
+      if (Cpu::cmpxchg4b(&_sipi, 0, value))
+        return;
+    }
 
     Cpu::atomic_or<volatile unsigned>(&_event, STATE_WAKEUP | (value & (EVENT_MASK | EVENT_DEBUG | EVENT_HOST | EVENT_RESUME)));
 
@@ -561,12 +731,14 @@ VMM_REGSET(CPUID,
        VMM_REG_RW(CPUID_ECX0,  0x02, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX0,  0x03, 0, ~0u,)
        VMM_REG_RW(CPUID_EAX1,  0x10, 0x673, ~0u,)
-       VMM_REG_RW(CPUID_EBX1,  0x11, 0, ~0u,)
+       VMM_REG_RW(CPUID_EBX1,  0x11, 1u << 16, ~0u,) /* max of logical CPU ids - disable SMT */
        VMM_REG_RW(CPUID_ECX1,  0x12, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX1,  0x13, 0, ~0u,)
        VMM_REG_RW(CPUID_EDXb,  0xb3, 0, ~0u,)
        VMM_REG_RW(CPUID_EAX80, 0x80000000, 0x80000004, ~0u,)
+       VMM_REG_RW(CPUID_EBX81, 0x80000011, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX81, 0x80000012, 0x100000, ~0u,)
+       VMM_REG_RW(CPUID_EDX81, 0x80000013, 0, ~0u,)
        VMM_REG_RW(CPUID_EAX82, 0x80000020, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX82, 0x80000021, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX82, 0x80000022, 0, ~0u,)

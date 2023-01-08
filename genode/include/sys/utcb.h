@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2008, Udo Steinberg <udo@hypervisor.org>
  * Copyright (C) 2008-2010, Bernhard Kauer <bk@vmmon.org>
- * Copyright (C) 2011, Alexander Boettcher <ab764283@os.inf.tu-dresden.de>
+ * Copyright (C) 2011-2023, Alexander Boettcher
  * Economic rights: Technische Universitaet Dresden (Germany)
  *
  * This file is part of NUL.
@@ -25,29 +25,27 @@
 #include "service/string.h"
 #include "service/logging.h"
 
-#define GREG(NAME)                                  \
-  union {                                           \
-    struct {                                        \
-      unsigned char           NAME##l, NAME##h;     \
-    };                                              \
-    unsigned short          NAME##x;                \
-    unsigned           e##NAME##x;                  \
-    mword              r##NAME##x;                  \
+#define GREG(NAME)             \
+  union {                      \
+    struct {                   \
+      unsigned char   NAME##l; \
+      unsigned char   NAME##h; \
+    };                         \
+    unsigned short    NAME##x; \
+    unsigned       e##NAME##x; \
+    mword          r##NAME##x; \
   }
-#define GREG16(NAME)                        \
-  union {                                   \
-    unsigned short          NAME;           \
-    unsigned           e##NAME;             \
-    mword              r##NAME##x;          \
+
+#define GREG16(NAME)           \
+  union {                      \
+    unsigned short    NAME;    \
+    unsigned       e##NAME;    \
+    mword          r##NAME;    \
   }
 
 
 struct Utcb
 {
-  enum {
-    STACK_START = 512,          ///< Index where we store a "frame pointer" to the top of the stack
-  };
-
   typedef struct Descriptor
   {
     uint16 sel, ar;
@@ -56,7 +54,32 @@ struct Utcb
       uint64 : 64;
       mword base;
     };
-    void set(unsigned short _sel, unsigned _base, unsigned _limit, unsigned short _ar) { sel = _sel; base = _base; limit = _limit; ar = _ar; };
+
+    void set(unsigned short _sel, unsigned _base, unsigned _limit, unsigned short _ar) {
+      sel = _sel; base = _base; limit = _limit; ar = _ar; };
+
+    /* 1 - 16bit, 2 - 32bit, 3 - 64bit */
+    unsigned size_type() const
+    {
+      if (ar & (1u << 9)) return 3;
+      return (ar & (1u << 10)) ? 2 : 1;
+    }
+
+    template<typename T>
+    T clamp_to_size_type(T address)
+    {
+      auto const type = size_type();
+      if (type == 1) return address & 0xfffflu;
+      if (type == 2) return address & 0xfffffffflu;
+      return address;
+    }
+
+    mword limit_type()
+    {
+      auto const type = size_type();
+      if (type == 3) return ~0UL;
+      return limit;
+    }
   } Descriptor;
 
   struct head {
@@ -69,7 +92,7 @@ struct Utcb
     };
     mword crd_translate;
     mword crd;
-    mword nul_cpunr;
+    mword cpuid;
   } head;
   union {
     struct {
@@ -98,12 +121,12 @@ struct Utcb
       mword pdpte[4];
 #ifdef __x86_64__
       mword        cr8;
-      mword        : 64;          // reserved (efer)
-      mword        : 64;          // reserved (star)
-      mword        : 64;          // reserved (lstar)
-      mword        : 64;          // reserved (cstar)
-      mword        : 64;          // reserved (fmask)
-      mword        : 64;          // reserved (kernel_gs_base)
+      mword        efer;
+      mword        star;
+      mword        lstar;
+      mword        cstar;
+      mword        fmask;
+      mword        kernel_gs;
       uint32       : 32;          // reserved (tpr)
       uint32       : 32;          // reserved (tpr_threshold)
 #endif
@@ -114,4 +137,7 @@ struct Utcb
     };
     unsigned msg[(4096 - sizeof(struct head)) / sizeof(unsigned)];
   };
+
+  bool fs_or_gs(Descriptor &desc) const {
+    return (&desc == &fs) || (&desc == &gs); }
 };

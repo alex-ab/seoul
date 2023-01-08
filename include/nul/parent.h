@@ -91,7 +91,7 @@ struct ParentProtocol {
    */
   static unsigned call(Utcb &utcb, unsigned cap_base, bool drop_frame, bool percpu = true) {
     unsigned res;
-    res = nova_call(cap_base + (percpu ? utcb.head.nul_cpunr : 0));
+    res = nova_call(cap_base + (percpu ? utcb.head.cpuid : 0));
     if (!res)
       if (!utcb.head.untyped) res = EPROTO; //if we don't get a result word it's a protocol violation
       else res = utcb.msg[0];
@@ -255,7 +255,7 @@ public:
       if (_session_base == _cap_base + CAP_SERVER_PT)
         sess = _cap_base + CAP_SERVER_SESSION; // Clients are identified by a translated semaphore
       else
-        sess = _session_base + utcb.head.nul_cpunr; // Clients are identified by session portals
+        sess = _session_base + utcb.head.cpuid; // Clients are identified by session portals
 
       //if we have already a server session revoke it to be able to receive an new mapping (overmapping not supported!)
       //- possible reason: server is gone and a new one is now in place
@@ -280,7 +280,7 @@ public:
         // we lock to avoid missing wakeups on retry
         SemaphoreGuard guard(_lock);
         res = ParentProtocol::get_portal(utcb, _cap_base + CAP_PSEUDONYM,
-					 _cap_base + CAP_SERVER_PT + utcb.head.nul_cpunr, _blocking, _service);
+					 _cap_base + CAP_SERVER_PT + utcb.head.cpuid, _blocking, _service);
       }
       if (res == ERETRY && _blocking) goto do_get_portal;
       if (res == ENONE)     goto do_call;

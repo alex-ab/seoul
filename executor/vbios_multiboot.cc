@@ -171,7 +171,7 @@ private:
     if (!(mbi = init_mbi(rip)))  return false;
 
     msg.cpu->clear();
-    msg.cpu->ripx     = rip;
+    msg.cpu->rip      = rip;
     msg.cpu->eax      = 0x2badb002;
     msg.cpu->ebx      = unsigned(mbi);
     msg.cpu->cr0      = 0x11;

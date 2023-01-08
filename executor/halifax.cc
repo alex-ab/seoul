@@ -36,8 +36,9 @@ public:
     return true;
   }
 
-  Halifax(VCpu *vcpu) : InstructionCache(vcpu) {
-    vcpu->executor.add(this,  receive_static);
+  Halifax(VCpu &vcpu) : InstructionCache(vcpu)
+  {
+    vcpu.executor.add(this,  receive_static);
   }
 
   void *operator new(size_t size)
@@ -51,9 +52,10 @@ public:
   }
 };
 
-PARAM_HANDLER(halifax,
-	      "halifax - create a halifax that emulatates instructions.")
+PARAM_HANDLER(halifax, "halifax - create a halifax that emulates instructions.")
 {
-  if (!mb.last_vcpu) Logging::panic("no VCPU for this Halifax");
-  new Halifax(mb.last_vcpu);
+  if (!mb.last_vcpu)
+    Logging::panic("no VCPU for this Halifax");
+
+  new Halifax(*mb.last_vcpu);
 }

@@ -125,22 +125,39 @@ class Cpu
   }
 
   template<unsigned operand_size>
-    static void move(void *tmp_dst, void *tmp_src) {
+  static inline void move(void *tmp_dst, void *tmp_src)
+  {
     // XXX aliasing!
-    if (operand_size == 0) *reinterpret_cast<unsigned char *>(tmp_dst) = *reinterpret_cast<unsigned char *>(tmp_src);
-    if (operand_size == 1) *reinterpret_cast<unsigned short *>(tmp_dst) = *reinterpret_cast<unsigned short *>(tmp_src);
-    if (operand_size == 2) *reinterpret_cast<unsigned int *>(tmp_dst) = *reinterpret_cast<unsigned int *>(tmp_src);
-    //VMM_MEMORY_BARRIER;
+    switch (operand_size) {
+    case 0:
+      *reinterpret_cast<unsigned char *>(tmp_dst) = *reinterpret_cast<unsigned char *>(tmp_src);
+      break;
+    case 1:
+      *reinterpret_cast<unsigned short *>(tmp_dst) = *reinterpret_cast<unsigned short *>(tmp_src);
+      break;
+    case 2:
+      *reinterpret_cast<unsigned int *>(tmp_dst) = *reinterpret_cast<unsigned int *>(tmp_src);
+      break;
+    case 3:
+      *reinterpret_cast<unsigned long long *>(tmp_dst) = *reinterpret_cast<unsigned long long *>(tmp_src);
+      break;
+    default:
+      asm volatile ("ud2a");
+    }
   }
 
   /**
    * Transfer bytes from src to dst.
    */
-  static void move(void * tmp_dst, void *tmp_src, unsigned order) {
+  static inline void move(void * tmp_dst, void *tmp_src, unsigned order)
+  {
     switch (order) {
     case 0:  move<0>(tmp_dst, tmp_src); break;
     case 1:  move<1>(tmp_dst, tmp_src); break;
     case 2:  move<2>(tmp_dst, tmp_src); break;
+#ifdef __x86_64__
+    case 3:  move<3>(tmp_dst, tmp_src); break;
+#endif
     default: asm volatile ("ud2a");
     }
   }

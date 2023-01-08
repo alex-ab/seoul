@@ -24,7 +24,7 @@
 #include VMM_REGBASE
 #undef  VMM_REG
 #undef  VMM_REGSET
-#define VMM_REGSET(NAME, ...)  bool NAME##_read(unsigned offset, unsigned &value) { switch (offset) { __VA_ARGS__ default: break; } return false; }
+#define VMM_REGSET(NAME, ...)  bool NAME##_read(unsigned offset, unsigned &value) const { switch (offset) { __VA_ARGS__ default: break; } return false; }
 #define VMM_REG(NAME, OFFSET, MEMBER, READ, WRITE, RESET) case OFFSET:  { READ }; return true;
 #include VMM_REGBASE
 #undef  VMM_REG
