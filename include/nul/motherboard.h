@@ -126,7 +126,11 @@ class Motherboard
           s+= alen;
           if (s[0] && strchr(param_separator(), s[0])) s++;
         }
-        PARAM_DEREF(param).func(*this, argv, start, s - start);
+
+        if (s < start || (s - start >= 1ll << 32))
+          Logging::panic("handle_arg function error");
+
+        PARAM_DEREF(param).func(*this, argv, start, unsigned(s - start));
         return;
       }
     }

@@ -68,8 +68,8 @@ class KeyboardController : public StaticReceiver<KeyboardController>
   DBus<MessagePS2>	&_bus_ps2;
   DBus<MessageLegacy>   &_bus_legacy;
   unsigned short _base;
-  unsigned _irqkbd;
-  unsigned _irqaux;
+  uint8    _irqkbd;
+  uint8    _irqaux;
   unsigned _ps2ports;
   unsigned char _ram[32];
 
@@ -88,7 +88,7 @@ class KeyboardController : public StaticReceiver<KeyboardController>
     return value;
   }
 
-  void read_from_device(unsigned char port)
+  void read_from_device(unsigned const port)
   {
     while (~_ram[RAM_STATUS] & STATUS_OBF)
       {
@@ -144,7 +144,7 @@ class KeyboardController : public StaticReceiver<KeyboardController>
     if (check_pwd(value, from_aux))  return;
 
     _ram[RAM_OBF] = value;
-    _ram[RAM_STATUS] = (_ram[RAM_STATUS] & ~STATUS_AUXOBF) | (from_aux ? STATUS_AUXOBF : STATUS_OBF);
+    _ram[RAM_STATUS] = uint8((_ram[RAM_STATUS] & ~STATUS_AUXOBF) | (from_aux ? STATUS_AUXOBF : STATUS_OBF));
 
     if ((_ram[RAM_STATUS] & STATUS_AUXOBF) == STATUS_AUXOBF   && _ram[RAM_CMDBYTE] & CMD_IRQAUX)
       {
@@ -173,14 +173,13 @@ public:
   {
     if (msg.type != MessageIOIn::TYPE_INB) return false;
     if (msg.port == _base)
-      {
-	msg.value = _ram[RAM_OBF];
-	_ram[RAM_STATUS] &= ~STATUS_AUXOBF;
-	_ram[RAM_OUTPORT] &= ~(OUTPORT_IRQAUX | OUTPORT_IRQKBD);
-	read_all_devices();
-      }
-    else if (msg.port == _base + 4)
-	msg.value = (_ram[RAM_STATUS] & ~STATUS_SYS) | (_ram[RAM_CMDBYTE] & CMD_SYS);
+    {
+      msg.value          = _ram[RAM_OBF];
+      _ram[RAM_STATUS]  &= uint8(~STATUS_AUXOBF);
+      _ram[RAM_OUTPORT] &= uint8(~(OUTPORT_IRQAUX | OUTPORT_IRQKBD));
+      read_all_devices();
+    } else if (msg.port == _base + 4)
+        msg.value = (_ram[RAM_STATUS] & ~STATUS_SYS) | (_ram[RAM_CMDBYTE] & CMD_SYS);
     else
       return false;
     return true;
@@ -190,6 +189,9 @@ public:
   bool  receive(MessageIOOut &msg)
   {
     if (msg.type != MessageIOOut::TYPE_OUTB) return false;
+
+    uint8 const msg_value_8 = uint8(msg.value);
+
     if (msg.port == _base)
       {
 	if (~_ram[RAM_STATUS] & STATUS_NO_INHB)  return true;
@@ -197,39 +199,41 @@ public:
 	if (_ram[RAM_STATUS] & STATUS_CMD)
 	  {
 	    handled = true;
+	    if (msg.value >= 256)
+	      Logging::printf("keyboard receive value too large %x\n", msg.value);
 	    switch (_ram[RAM_LASTCMD])
 	      {
 	      case 0x60 ... 0x7f: // write ram
-		_ram[_ram[RAM_LASTCMD] - 0x60] = msg.value;
+		_ram[_ram[RAM_LASTCMD] - 0x60] = msg_value_8;
 		break;
 	      case 0xa5: // load pwd
 		if (_ram[RAM_PWD_COUNT] + RAM_PWD_FIRST <= RAM_PWD_LAST)
 		  {
-		    _ram[_ram[RAM_PWD_COUNT] + RAM_PWD_FIRST] = msg.value;
+		    _ram[_ram[RAM_PWD_COUNT] + RAM_PWD_FIRST] = msg_value_8;
 		    _ram[RAM_PWD_COUNT]++;
-		    if (!msg.value) _ram[RAM_PWD_COUNT] = RAM_PWD_LAST + 1;
+		    if (!msg_value_8) _ram[RAM_PWD_COUNT] = RAM_PWD_LAST + 1;
 		  }
 		break;
 	      case 0xd1: // write outport
-		_ram[RAM_OUTPORT] = msg.value;
+		_ram[RAM_OUTPORT] = msg_value_8;
 		legacy_write(MessageLegacy::GATE_A20, _ram[RAM_OUTPORT] & OUTPORT_A20 ? 1 : 0);
 		if (~_ram[RAM_OUTPORT] & OUTPORT_RESET)
 		  legacy_write(MessageLegacy::RESET, 0);
 		break;
 	      case 0xd2: // write keyboard output buffer
-		got_data(translate_keycodes(msg.value), false);
+		got_data(translate_keycodes(msg_value_8), false);
 		break;
 	      case 0xd3: // write aux output buffer
-		got_data(msg.value, true);
+		got_data(msg_value_8, true);
 		break;
 	      case 0xd4: // forward to aux
 		{
-		  MessagePS2 msg2(_ps2ports + 1, MessagePS2::SEND_COMMAND, msg.value);
+		  MessagePS2 msg2(_ps2ports + 1, MessagePS2::SEND_COMMAND, msg_value_8);
 		  _bus_ps2.send(msg2);
 		}
 		break;
 	      case 0xdd: // disable a20
-		_ram[RAM_OUTPORT] &= ~OUTPORT_A20;
+		_ram[RAM_OUTPORT] &= uint8(~OUTPORT_A20);
 		legacy_write(MessageLegacy::GATE_A20, _ram[RAM_OUTPORT] & OUTPORT_A20 ? 1 : 0);
 		break;
 	      case 0xdf: // enable a20
@@ -241,17 +245,17 @@ public:
 		break;
 	      }
 	  }
-	_ram[RAM_STATUS] &= ~STATUS_CMD;
+	_ram[RAM_STATUS] &= uint8(~STATUS_CMD);
 	if (!handled)
 	  {
-	    MessagePS2 msg2(_ps2ports, MessagePS2::SEND_COMMAND, msg.value);
+	    MessagePS2 msg2(_ps2ports, MessagePS2::SEND_COMMAND, msg_value_8);
 	    _bus_ps2.send(msg2);
 	  }
       }
     else if (msg.port == _base+4)
       {
 	if (~_ram[RAM_STATUS] & STATUS_NO_INHB)  return true;
-	_ram[RAM_LASTCMD] = msg.value;
+	_ram[RAM_LASTCMD] = msg_value_8;
 	_ram[RAM_STATUS] |= STATUS_CMD;
 	switch (_ram[RAM_LASTCMD])
 	  {
@@ -264,12 +268,12 @@ public:
 	  case 0xa5: // load pwd
 	    break;
 	  case 0xa6: // enable pwd
-	    _ram[RAM_STATUS] &= ~STATUS_NO_INHB;
+	    _ram[RAM_STATUS] &= uint8(~STATUS_NO_INHB);
 	    _ram[RAM_PWD_CMP] = 0;
 	    if (_ram[RAM_SECON])
 	      {
 		_ram[RAM_OBF] = _ram[RAM_SECON];
-		_ram[RAM_STATUS] = (_ram[RAM_STATUS] & ~STATUS_AUXOBF) | STATUS_OBF;
+		_ram[RAM_STATUS] = uint8((_ram[RAM_STATUS] & ~STATUS_AUXOBF) | STATUS_OBF);
 		if (_ram[RAM_CMDBYTE] & CMD_IRQKBD)
 		  {
 		    MessageIrqLines msg2(MessageIrq::ASSERT_IRQ, _irqkbd);
@@ -281,7 +285,7 @@ public:
 	    _ram[RAM_CMDBYTE] |= CMD_DISAUX;
 	    break;
 	  case 0xa8: // enable kbd
-	    _ram[RAM_CMDBYTE] &= ~CMD_DISAUX;
+	    _ram[RAM_CMDBYTE] &= uint8(~CMD_DISAUX);
 	    break;
 	  case 0xa9: // aux interface test
 	    got_data(0, false);
@@ -296,7 +300,7 @@ public:
 	    _ram[RAM_CMDBYTE] |= CMD_DISKBD;
 	    break;
 	  case 0xae: // enable kbd
-	    _ram[RAM_CMDBYTE] &= ~CMD_DISKBD;
+	    _ram[RAM_CMDBYTE] &= uint8(~CMD_DISKBD);
 	    break;
 	  case 0xc0: // read input port
 	    got_data(0, false);
@@ -340,7 +344,7 @@ public:
   }
 
   KeyboardController(DBus<MessageIrqLines> &bus_irqlines, DBus<MessagePS2> &bus_ps2, DBus<MessageLegacy> &bus_legacy,
-		     unsigned short base, unsigned irqkbd, unsigned irqaux, unsigned ps2ports)
+		     unsigned short base, uint8 irqkbd, uint8 irqaux, unsigned ps2ports)
    : _bus_irqlines(bus_irqlines), _bus_ps2(bus_ps2), _bus_legacy(bus_legacy), _base(base), _irqkbd(irqkbd), _irqaux(irqaux), _ps2ports(ps2ports), _ram()
   {}
 };
@@ -351,7 +355,7 @@ PARAM_HANDLER(kbc,
 	      "The PS2 ports are automatically distributed, such that the first KBC gets 0-1, the second one 2-3,...")
 {
   static unsigned kbc_count;
-  KeyboardController *dev = new KeyboardController(mb.bus_irqlines, mb.bus_ps2, mb.bus_legacy, argv[0], argv[1], argv[2], 2*kbc_count++);
+  KeyboardController *dev = new KeyboardController(mb.bus_irqlines, mb.bus_ps2, mb.bus_legacy, uint16(argv[0]), uint8(argv[1]), uint8(argv[2]), 2 * kbc_count++);
   mb.bus_ioin.add(dev,  KeyboardController::receive_static<MessageIOIn>);
   mb.bus_ioout.add(dev, KeyboardController::receive_static<MessageIOOut>);
   mb.bus_ps2.add(dev,   KeyboardController::receive_static<MessagePS2>);

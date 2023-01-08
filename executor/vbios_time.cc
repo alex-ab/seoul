@@ -21,7 +21,7 @@
 
 class VirtualBiosTime : public StaticReceiver<VirtualBiosTime>, public BiosCommon
 {
-  unsigned char tobcd(unsigned char v) { return ((v / 10) << 4) | (v % 10); }
+  unsigned char tobcd(timevalue const v) { return static_cast<unsigned char>(((v / 10) << 4) | (v % 10)); }
 
   /**
    * Handle the HW timer IRQ.
@@ -30,13 +30,13 @@ class VirtualBiosTime : public StaticReceiver<VirtualBiosTime>, public BiosCommo
   {
     // Note: no need for EOI since we run in AEOI mode!
     // increment BIOS tick counter
-    unsigned ticks = read_bda(0x6c);
+    unsigned ticks = read_bda<unsigned>(0x6c);
     ticks++;
     // midnight?
     if (ticks >= 0x001800B0)
       {
 	ticks = 0;
-	write_bda(0x70, read_bda(0x70)+1, 1);
+	write_bda(0x70, read_bda<unsigned>(0x70)+1, 1);
       }
     write_bda(0x6c, ticks, 4);
 
@@ -53,10 +53,10 @@ class VirtualBiosTime : public StaticReceiver<VirtualBiosTime>, public BiosCommo
       {
       case 0x00: // get system time
 	{
-	  unsigned ticks = read_bda(0x6c);
-	  msg.cpu->al = read_bda(0x70);
-	  msg.cpu->dx = ticks;
-	  msg.cpu->cx = ticks >> 16;
+	  unsigned ticks = read_bda<unsigned>(0x6c);
+	  msg.cpu->al = read_bda<unsigned char>(0x70);
+	  msg.cpu->dx = static_cast<unsigned short>(ticks);
+	  msg.cpu->cx = static_cast<unsigned short>(ticks >> 16);
 	  msg.mtr_out |= MTD_GPR_ACDB;
 	  break;
 	}
@@ -67,7 +67,7 @@ class VirtualBiosTime : public StaticReceiver<VirtualBiosTime>, public BiosCommo
       case 0x02: // realtime clock
 	{
 	  // XXX use the RTC time
-	  unsigned seconds = _mb.clock()->clock(1);
+	  auto seconds = _mb.clock()->clock(1);
 	  msg.cpu->ch = tobcd((seconds / 3600) % 24);
 	  msg.cpu->cl = tobcd((seconds / 60) % 60);
 	  msg.cpu->dh = tobcd(seconds % 60);

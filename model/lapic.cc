@@ -164,7 +164,7 @@ private:
     if (!_ICT || !_timer_start)  return 0;
 
     timevalue delta = (now - _timer_start) >> _timer_dcr_shift;
-    if (delta < _ICT)  return _ICT - delta;
+    if (delta < _ICT)  return unsigned(_ICT - delta);
 
     // one shot?
     if (~_TIMER & (1 << 17))  {
@@ -173,7 +173,7 @@ private:
     }
 
     // add periods to the time we started to detect the next overflow
-    unsigned done = delta % _ICT;
+    unsigned done = unsigned(delta % _ICT);
     _timer_start += timevalue((delta - done)) << _timer_dcr_shift;
 
     return _ICT - done;
@@ -459,7 +459,7 @@ private:
     if (event == VCpu::EVENT_FIXED) {
       // set Remote IRR on level triggered IRQs
       _rirr[num] = level;
-      accept_vector(lvt, level, true);
+      accept_vector(uint8(lvt), level, true);
 
       // we have delivered it
       // XXX what about level triggered LVT0 DS?
@@ -571,7 +571,7 @@ public:
     assert(event != VCpu::EVENT_LOWEST);
 
     if (event == VCpu::EVENT_FIXED)
-      accept_vector(msg.icr, msg.icr & MessageApic::ICR_LEVEL, msg.icr & MessageApic::ICR_ASSERT);
+      accept_vector(uint8(msg.icr), msg.icr & MessageApic::ICR_LEVEL, msg.icr & MessageApic::ICR_ASSERT);
     else {
       if (event == VCpu::EVENT_SIPI) event |= (msg.icr & 0xff) << 8;
 
@@ -825,7 +825,7 @@ PARAM_HANDLER(lapic,
     Logging::panic("%s can't get a timer", __PRETTY_FUNCTION__);
 
   static unsigned lapic_count;
-  new Lapic(mb, *mb.last_vcpu, ~argv[0] ? argv[0]: lapic_count, msg0.nr);
+  new Lapic(mb, *mb.last_vcpu, unsigned(~argv[0] ? argv[0] : lapic_count), msg0.nr);
   lapic_count++;
 }
 

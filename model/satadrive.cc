@@ -55,7 +55,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   void complete_command()
   {
     // remove DRQ
-    _status = _status & ~0x8;
+    _status = uint8(_status & ~0x8);
 
     unsigned d2h[5];
     d2h[0] = _error << 24 | _status << 16 | 0x4000 | (_regs[0] & 0x0f00) | 0x34;
@@ -75,7 +75,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
     unsigned psf[5];
 
     // move from BSY to DRQ
-    _status = (_status & ~0x80) | 0x8;
+    _status = uint8((_status & ~0x80) | 0x8);
 
     memset(psf, 0, sizeof(psf));
     psf[0] = _error << 24 | _status << 16 | (irq ? 0x4000 : 0) | 0x2000 | (_regs[0] & 0x0f00) | 0x5f;
@@ -98,19 +98,19 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   /**
    * We build the identify response in a buffer to allow to use push_data.
    */
-  void build_identify_buffer(unsigned short *identify)
+  void build_identify_buffer(uint16 * const identify) const
   {
     memset(identify, 0, 512);
     for (unsigned i=0; i<20; i++)
-      identify[27+i] = _params.name[2*i] << 8 | _params.name[2*i+1];
+      identify[27+i] = uint16(_params.name[2*i] << 8 | _params.name[2*i+1]);
     identify[47] = 0x80ff;
     identify[49] = 0x0300;
     identify[50] = 0x4001; // capabilites
     identify[53] = 0x0006; // bytes 64-70, 88 are valid
-    identify[59] = 0x100 | _multiple; // the multiple count
-    unsigned maxlba28 = (_params.sectors >> 32) ? ~0u :  _params.sectors;
-    identify[60] = maxlba28 & 0xffff;
-    identify[61] = maxlba28 >> 16;
+    identify[59] = uint16(0x100 | _multiple); // the multiple count
+    unsigned maxlba28 = (_params.sectors >> 32) ? ~0u : unsigned(_params.sectors);
+    identify[60] = uint16(maxlba28 & 0xffff);
+    identify[61] = uint16(maxlba28 >> 16);
     identify[64] = 3;      // pio 3+4
     identify[75] = 0x1f;   // NCQ depth 32
     identify[76] = 0x002;   // disabled NCQ + 1.5gbit
@@ -122,7 +122,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
     identify[0xff] = 0xa5;
     unsigned char checksum = 0;
     for (unsigned i=0; i<512; i++) checksum += reinterpret_cast<unsigned char *>(identify)[i];
-    identify[0xff] -= checksum << 8;
+    identify[0xff] -= uint16(uint16(checksum) << 8);
   };
 
   /**
@@ -130,23 +130,26 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
    *
    * Return the number of byte written.
    */
-  unsigned push_data(size_t length, void *data, bool &irq)
+  size_t push_data(size_t length, void *data, bool &irq)
   {
     if (!_dsf[3]) return 0;
-    uintptr_t prdbase = union64(_dsf[2], _dsf[1]);
+
+    auto const prdbase = union64(_dsf[2], _dsf[1]);
+    unsigned       prd = 0;
+    size_t      offset = 0;
+
     if (_verbose)
       Logging::printf("ahci: push data %zx prdbase %zx _dsf %x %x %x\n", length, size_t(prdbase), _dsf[1], _dsf[2], _dsf[3]);
-    size_t prd = 0;
-    size_t offset = 0;
+
     while (offset < length && prd < _dsf[3])
       {
 	unsigned prdvalue[4];
-	copy_in(prdbase + prd*16, prdvalue, 16);
+	copy_in(uintptr_t(prdbase + prd*16), prdvalue, 16);
 
 	irq = irq || prdvalue[3] & 0x80000000;
 	size_t sublen = (prdvalue[3] & 0x3fffff) + 1;
 	if (sublen > length - offset) sublen = length - offset;
-	copy_out(union64(prdvalue[1], prdvalue[0]), reinterpret_cast<char *>(data)+offset, sublen);
+	copy_out(uintptr_t(union64(prdvalue[1], prdvalue[0])), reinterpret_cast<char *>(data)+offset, sublen);
 	offset += sublen;
 	prd++;
       }
@@ -177,7 +180,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
       }
 
     if (!_dsf[3]) return 0;
-    uintptr_t prdbase = union64(_dsf[2], _dsf[1]);
+    auto const prdbase = union64(_dsf[2], _dsf[1]);
 
     assert(_dsf[6] < sizeof(_splits)/sizeof(_splits[0]));
     assert(_splits[_dsf[6]] == 0);
@@ -193,12 +196,12 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	  {
 
 	    unsigned prdvalue[4];
-	    copy_in(prdbase + prd*16, prdvalue, 16);
+	    copy_in(uintptr_t(prdbase + prd*16), prdvalue, 16);
 
 	    size_t sublen = ((prdvalue[3] & 0x3fffff) + 1) - lastoffset;
 	    if (sublen > len - transfer) sublen = len - transfer;
 
-	    _dma[dmacount].byteoffset = union64(prdvalue[1], prdvalue[0]) + lastoffset;
+	    _dma[dmacount].byteoffset = uintptr_t(union64(prdvalue[1], prdvalue[0]) + lastoffset);
 	    _dma[dmacount].bytecount = sublen;
 	    transfer += sublen;
 	    lastoffset = 0;
@@ -357,7 +360,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
     _regs[1] = _params.flags & DiskParameter::FLAG_ATAPI ? 0xeb1401 : 1;
     _status = 0x40; // DRDY
     _error = 1;
-    _ctrl = _regs[3] >> 24;
+    _ctrl = uint8(_regs[3] >> 24);
     memset(_splits, 0, sizeof(_splits));
     complete_command();
   };
@@ -386,7 +389,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 	    {
 
 	      // update ctrl register
-	      _ctrl = _regs[3] >> 24;
+	      _ctrl = uint8(_regs[3] >> 24);
 
 	      // software reset?
 	      if (_ctrl & 0x4)
@@ -409,12 +412,12 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
   {
     if (msg.disknr != _hostdisk || msg.usertag >= sizeof(_splits)/sizeof(_splits[0])) return false;
     // we are done
-    _status = _status & ~0x8;
+    _status = uint8(_status & ~0x8u);
     assert(_splits[msg.usertag]);
     assert(!msg.status);
     if (!--_splits[msg.usertag])
       {
-	_dsf[6] = msg.usertag;
+	_dsf[6] = unsigned(msg.usertag);
 	complete_command();
       }
     return true;
@@ -433,7 +436,7 @@ PARAM_HANDLER(drive,
 	      "Example: 'drive:0,1,2' to put the first sigma0 drive on the third port of the second controller.")
 {
   DiskParameter params;
-  unsigned hostdisk = argv[0];
+  unsigned hostdisk = unsigned(argv[0]);
   MessageDisk msg0(hostdisk, &params);
   check0(!mb.bus_disk.send(msg0) || msg0.error != MessageDisk::DISK_OK, "%s could not get disk %x parameters error %x", __PRETTY_FUNCTION__, hostdisk, msg0.error);
 
@@ -443,8 +446,8 @@ PARAM_HANDLER(drive,
   mb.bus_diskcommit.add(drive, SataDrive::receive_static<MessageDiskCommit>);
 
   // XXX put on SATA bus
-  MessageAhciSetDrive msg(drive, argv[2]);
-  if (!mb.bus_ahcicontroller.send(msg, argv[1]))
+  MessageAhciSetDrive msg(drive, unsigned(argv[2]));
+  if (!mb.bus_ahcicontroller.send(msg, unsigned(argv[1])))
     Logging::panic("AHCI controller #%ld does not allow to set drive #%lx\n", argv[1], argv[2]);
 }
 

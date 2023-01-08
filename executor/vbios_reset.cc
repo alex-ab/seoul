@@ -246,7 +246,7 @@ class VirtualBiosReset : public StaticReceiver<VirtualBiosReset>, public BiosCom
       fix_acpi_checksum(_resources + index, 20, 8);
     }
     else if (!strcmp("DSDT", name)) {
-        unsigned table;
+        size_t table;
         check1(false, !(table = alloc(sizeof(AmlCode), 0x10)),
                 "allocate ACPI table failed");
         _resources[index] = Resource(name, table, sizeof(AmlCode), true);
@@ -259,7 +259,7 @@ class VirtualBiosReset : public StaticReceiver<VirtualBiosReset>, public BiosCom
         memcpy(mem_ptr() + table, AmlCode, sizeof(AmlCode));
     }
     else if (!strcmp("FACS", name)) {
-        unsigned table;
+        size_t table;
         check1(false, !(table = alloc(36, 64)), "allocate ACPI table failed");
         _resources[index] = Resource(name, table, 36, true);
         init_acpi_table(name);

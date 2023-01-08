@@ -28,7 +28,7 @@ int cpl0_test() {
   /**
    * Add base and check segment type and limit.
    */
-  int handle_segment(CpuState::Descriptor *desc, unsigned &virt, unsigned length, bool write, bool stackop)
+  int handle_segment(CpuState::Descriptor *desc, unsigned long &virt, unsigned length, bool write, bool stackop)
   {
     // align address
     if (!_entry || stackop)
@@ -54,7 +54,7 @@ int cpl0_test() {
     fault |= (~desc->ar & 0x80) || (!write && ((desc->ar & 0xa) == 0x8)) || (write && (desc->ar & 0xa) != 0x2);
     if (fault)
       {
-	Logging::printf("%s() #%zx %x+%d desc %x limit %x base %zx esp %x\n", __func__, size_t(desc - &_cpu->es), virt, length, desc->ar, desc->limit, size_t(desc->base), _cpu->esp);
+	Logging::printf("%s() #%zx %lx+%d desc %x limit %x base %zx esp %x\n", __func__, size_t(desc - &_cpu->es), virt, length, desc->ar, desc->limit, size_t(desc->base), _cpu->esp);
 	if (desc == &_cpu->ss) {  SS0; } else { GP0; }
       }
 
@@ -64,7 +64,7 @@ int cpl0_test() {
   }
 
   template<unsigned operand_size>
-  int logical_mem(CpuState::Descriptor *desc, unsigned virt, bool write, void *&res, bool stackop=false)
+  int logical_mem(CpuState::Descriptor *desc, unsigned long virt, bool write, void *&res, bool stackop=false)
   {
     handle_segment(desc, virt, 1 << operand_size, write, stackop)
       || prepare_virtual(virt, 1 << operand_size, user_access(write ? TYPE_W : TYPE_R) , res);
@@ -172,7 +172,8 @@ int helper_INTO() {  _oeip = _cpu->eip; _mtr_out |= MTD_RIP_LEN; if (_cpu->efl &
   template<unsigned operand_size>
   void __attribute__((regparm(3)))  helper_LRET(void *tmp_src)
   {
-    unsigned tmp_eip = 0, tmp_cs = 0;
+    unsigned       tmp_eip = 0;
+    unsigned short tmp_cs  = 0;
     helper_POP<operand_size>(&tmp_eip) || helper_POP<operand_size>(&tmp_cs) || helper_far_jmp(tmp_cs, tmp_eip, _cpu->efl);
     if (tmp_src)  _cpu->esp += *reinterpret_cast<unsigned short *>(tmp_src);
   }
@@ -257,7 +258,7 @@ helper_LDT(LGDT, gd, MTD_GDTR)
     void *addr = nullptr;						\
     if (!modrm2mem(addr, 6, user_access(TYPE_W)))			\
       {									\
-	unsigned base = _cpu->VAR.base;					\
+	auto base = _cpu->VAR.base;					\
 	if (operand_size == 1) base &= 0x00ffffff;			\
 	move<1>(addr, &_cpu->VAR.limit);				\
 	move<2>(reinterpret_cast<char *>(addr)+2, &base);		\
@@ -271,7 +272,7 @@ helper_SDT(SGDT,gd, MTD_GDTR)
   template<unsigned operand_size>
   int __attribute__((regparm(3)))  helper_POPF()
   {
-    unsigned long tmp = READ(efl);
+    auto tmp = READ(efl);
     if (_cpu->v86() && _cpu->iopl() < 3)
       GP0
     else if (!helper_POP<operand_size>(&tmp))
@@ -348,7 +349,7 @@ int calc_flags(unsigned operand_size, void *src, void *dst) {
 
 #define NCHECK(X)  { if (X) break; }
 #define FEATURE(X,Y) { if (feature & (X)) { Y; } }
-  template<unsigned feature, unsigned operand_size>
+  template<unsigned feature, unsigned short operand_size>
   int __attribute__((regparm(3)))  string_helper()
   {
     while ((_entry->address_size == 1 && _cpu->cx) || (_entry->address_size == 2 && _cpu->ecx) || !(_entry->prefixes & 0xff))
@@ -364,7 +365,7 @@ int calc_flags(unsigned operand_size, void *src, void *dst) {
 	FEATURE(SH_SAVE_EDI, NCHECK(logical_mem<operand_size>(&_cpu->es, _cpu->edi, true, dst)));
 	FEATURE(SH_SAVE_EDI | SH_SAVE_EAX, move<operand_size>(dst, src));
 
-	int size = 1 << operand_size;
+	unsigned short size = 1 << operand_size;
 	if (_cpu->efl & 0x400)  size = -size;
 	FEATURE(SH_LOAD_ESI,               if (_entry->address_size == 1)  _cpu->si += size; else _cpu->esi += size;);
 	FEATURE(SH_LOAD_EDI | SH_SAVE_EDI, if (_entry->address_size == 1)  _cpu->di += size; else _cpu->edi += size;);
@@ -458,7 +459,7 @@ struct Descriptor
     desc->sel = selector;
     desc->limit = limit();
     desc->base  = base0  | (base1 << 16) | (base2 << 24);
-    desc->ar    = ar0 | ((ar1 & 0xf0) << 4);
+    desc->ar    = ((uint16(ar1 & 0xf0)) << 4) + ar0;
   }
 
 };
@@ -536,7 +537,7 @@ int helper_LTR(unsigned short selector)
   if (!_cpu->pm() || _cpu->v86()) UD0;
   if (_cpu->cpl()) GP0;
   if (selector & 0x4) GP(selector & ~0x7);
-  selector &= ~0x7;
+  selector &= static_cast<unsigned short>(~0x7u);
 
   Descriptor desc;
   if (!load_gdt_descriptor(desc, selector, false))
@@ -555,7 +556,7 @@ int helper_LLDT(unsigned short selector)
   if (!_cpu->pm() || _cpu->v86()) UD0;
   if (_cpu->cpl()) GP0;
   if (selector & 0x4) GP(selector & ~0x7);
-  selector &= ~0x7;
+  selector &= static_cast<unsigned short>(~0x7u);
   if (selector)
     {
       Descriptor desc;
@@ -614,14 +615,14 @@ int set_segment(CpuState::Descriptor *seg, unsigned short sel, bool cplcheck = t
   return _fault;
 }
 
-int helper_far_jmp(unsigned tmp_cs, unsigned tmp_eip, unsigned tmp_flag)
+int helper_far_jmp(unsigned short const tmp_cs, unsigned tmp_eip, unsigned tmp_flag)
 {
   _mtr_out |= MTD_CS_SS | MTD_RFLAGS;
   if (!_cpu->pm() || _cpu->v86())
     // realmode + v86mode
     {
       if (tmp_eip > _cpu->cs.limit) GP0;
-      _cpu->cs.ar  = (_cpu->cs.ar & ~0xf) | 0x3;
+      _cpu->cs.ar  = (_cpu->cs.ar & static_cast<unsigned short>(~0xf)) | 0x3;
       set_realmode_segment(&_cpu->cs, tmp_cs, _cpu->v86());
       _cpu->eip    = tmp_eip;
       _cpu->efl    = (_cpu->efl & (EFL_VIP | EFL_VIF | EFL_VM | EFL_IOPL)) | (tmp_flag  & ~(EFL_VIP | EFL_VIF | EFL_VM | EFL_IOPL));
@@ -685,7 +686,8 @@ int helper_IRET()
 
 
   // protected mode
-  unsigned tmp_eip = 0, tmp_cs = 0, tmp_flag = _cpu->efl;
+  unsigned tmp_eip = 0, tmp_flag = _cpu->efl;
+  unsigned short tmp_cs = 0;
   if (helper_POP<operand_size>(&tmp_eip) || helper_POP<operand_size>(&tmp_cs) || helper_POP<operand_size>(&tmp_flag))
     return _fault;
 
@@ -693,12 +695,13 @@ int helper_IRET()
   if ((tmp_flag & EFL_VM) && !_cpu->cpl())
     {
       assert(operand_size == 2);
-      unsigned tmp_ss = 0, tmp_esp = 0;
+      unsigned short tmp_ss = 0;
+      unsigned tmp_esp = 0;
       if (helper_POP<operand_size>(&tmp_esp) || helper_POP<operand_size>(&tmp_ss))
 	return _fault;
-      unsigned sels[4];
-      for (unsigned i=0; i < 4; i++)
-	if (helper_POP<operand_size>(sels+i)) return _fault;
+      unsigned short sels[4];
+      for (unsigned i = 0; i < 4; i++)
+        if (helper_POP<operand_size>(sels+i)) return _fault;
       _cpu->eip = tmp_eip & 0xffff;  // upper bits ignored while entering a VM
       _cpu->esp = tmp_esp;
       _cpu->efl = tmp_flag | 2;
@@ -722,7 +725,8 @@ int helper_IRET()
 	  if (tmp_eip > desc.limit())  GP0;
 	  if ((tmp_cs & 3) != _cpu->cpl())
 	    {
-	      unsigned tmp_ss = 0, tmp_esp = 0;
+	      unsigned short tmp_ss = 0;
+	      unsigned tmp_esp = 0;
 	      if (helper_POP<operand_size>(&tmp_esp) || helper_POP<operand_size>(&tmp_ss))
 		return _fault;
 	      _cpu->esp = tmp_esp;
@@ -764,7 +768,7 @@ int idt_traversal(unsigned event, unsigned error_code)
 	  || helper_PUSH<1>(&_cpu->eip)) return _fault;
       if (_cpu->id.limit < (ofs | 3)) GP0;
       _cpu->efl &= ~(EFL_AC | EFL_TF | EFL_IF | EFL_RF);
-      return helper_far_jmp(idt >> 16, idt & 0xffff, _cpu->efl & ~(EFL_IF | EFL_TF | EFL_AC));
+      return helper_far_jmp(static_cast<unsigned short>(idt >> 16), idt & 0xffff, _cpu->efl & ~(EFL_IF | EFL_TF | EFL_AC));
     }
 
   // pmode
@@ -833,7 +837,7 @@ int idt_traversal(unsigned event, unsigned error_code)
 
 		// XXX hacked TSS handling
 		void *tss;
-		unsigned old_ss = _cpu->ss.sel;
+		unsigned short old_ss = _cpu->ss.sel;
 		unsigned short new_ss;
 		unsigned new_esp;
 		if (prepare_virtual(_cpu->tr.base + 4, 8, MemTlb::TYPE_R, tss)) return _fault;
@@ -908,7 +912,7 @@ int helper_MOV__EDX__DB0()
   unsigned dbreg = (_entry->data[_entry->offset_opcode] >> 3) & 0x7;
   if ((dbreg == 4 || dbreg == 5) && ~_cpu->cr4 & 0x8)
     dbreg += 2;
-  unsigned value = *get_reg32((_entry->data[_entry->offset_opcode]) & 0x7);
+  auto const value = *get_reg32((_entry->data[_entry->offset_opcode]) & 0x7);
   switch (dbreg)
     {
     case 0 ... 3: _dr[dbreg] = value; break;
@@ -927,7 +931,7 @@ int helper_MOV__EDX__DB0()
  */
 int helper_FXSAVE()
 {
-  unsigned virt = modrm2virt();
+  auto const virt = modrm2virt();
   if (virt & 0xf) GP0; // could be also AC if enabled
   for (unsigned i=0; i < sizeof(_fpustate)/sizeof(unsigned); i++)
     {
@@ -948,7 +952,8 @@ int helper_FRSTOR()
 
 void helper_AAM(unsigned char imm) {
   if (!imm) DE0(this);
-  _cpu->ax = ((_cpu->al / imm) << 8) | (_cpu->al % imm);
+  _cpu->ax  = static_cast<unsigned short>((_cpu->al / imm) << 8);
+  _cpu->ax += (_cpu->al % imm);
   _mtr_out |= MTD_GPR_ACDB | MTD_RFLAGS;
   unsigned zero = 0;
   calc_flags(0, &_cpu->eax, &zero);
@@ -974,10 +979,10 @@ void helper_XLAT() {
 template<unsigned operand_size>
 void helper_ENTER(unsigned *imm) {
 
-  unsigned long ebp = _cpu->ebp;
+  auto ebp = _cpu->ebp;
   if (helper_PUSH<operand_size>(&ebp)) return;
 
-  unsigned long frametemp = _cpu->esp;
+  auto frametemp = _cpu->esp;
   unsigned nesting_level = (*imm >> 16) & 0x1f;
   void *tmp = 0;
   for (unsigned n = 1; n < nesting_level; n++) {

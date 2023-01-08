@@ -137,9 +137,9 @@ struct MessageMem
     MSI_RH      = 1 << 3
   };
   bool read;
-  uintptr_t phys;
+  uint64    phys;
   unsigned *ptr;
-  MessageMem(bool _read, uintptr_t _phys, unsigned *_ptr) : read(_read), phys(_phys), ptr(_ptr) {}
+  MessageMem(bool _read, uint64 _phys, unsigned *_ptr) : read(_read), phys(_phys), ptr(_ptr) {}
 };
 
 /**
@@ -153,7 +153,7 @@ struct MessageMemRegion
 {
   uintptr_t page;
   uintptr_t start_page     { 0 };
-  unsigned  count          { 0 };
+  uintptr_t count          { 0 };
   char *    ptr            { nullptr };
   bool      actual_physmem { false};
   MessageMemRegion(uintptr_t _page) : page(_page) {}
@@ -335,7 +335,7 @@ struct MessagePS2
       SEND_COMMAND
     }  type;
   unsigned char value;
-  MessagePS2(unsigned char _port, Type _type, unsigned char _value) : port(_port), type(_type), value(_value) {}
+  MessagePS2(unsigned _port, Type _type, unsigned char _value) : port(_port), type(_type), value(_value) {}
 };
 
 

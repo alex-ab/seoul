@@ -32,8 +32,8 @@ class CpuState : public ArchCpuState
   unsigned v86()   { return cr0 & 0x1 && efl & (1 << 17); }
   void edx_eax(unsigned long long value)
   {
-    eax = value;
-    edx = value >> 32;
+    eax = unsigned(value);
+    edx = unsigned(value >> 32);
   };
 
   unsigned long long edx_eax() {  return union64(edx, eax); };

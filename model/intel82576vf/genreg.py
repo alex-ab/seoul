@@ -61,7 +61,7 @@ def read_dispatch_gen(name, regs, out):
         return "val = %s_read();" % r['name']
     def filt(r):
         return 'write-only' not in r
-    out ("\nuint32 %s(uint32 offset)\n{\n\tuint32 val;" % name)
+    out ("\nuint32 %s(uintptr_t offset)\n{\n\tuint32 val;" % name)
     dispatch_gen("offset", regs, filt, mangle, out, "val = 0; /* UNDEFINED! */")
     out ("\treturn val;\n}")
 
@@ -70,7 +70,7 @@ def write_dispatch_gen(name, regs, out):
         return "%s_write(value);" % r['name']
     def filt(r):
         return 'read-only' not in r
-    out ("\nvoid %s(uint32 offset, uint32 value)\n{" % name)
+    out ("\nvoid %s(uintptr_t offset, uint32 value)\n{" % name)
     dispatch_gen("offset", regs, filt, mangle, out, "/* UNDEFINED! */")
     out ("}")
 

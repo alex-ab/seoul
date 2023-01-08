@@ -179,7 +179,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			void *        memory_vmm;
 			gpu_mem_entry guest_fb_memory[1280];
 			unsigned      valid_memory_entries;
-			uint16          format;
+			uint32          format;
 			uint16          valid;
 			uint32          resource_id;
 			uint32          width;
@@ -206,7 +206,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		{
 			MessageConsole msg(MessageConsole::TYPE_FREE_VIEW,
 			                   console_id);
-			msg.view = 2 + resource.resource_id; /* XXX */
+			msg.view = uint16(2 + resource.resource_id); /* XXX */
 			_bus_console.send(msg);
 
 			resource.valid = false;
@@ -256,7 +256,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 					return;
 
 				unsigned       length    = resource.guest_fb_memory[i].length;
-				unsigned const unaligned = resource_offset % guest_stride;
+				unsigned const unaligned = unsigned(resource_offset % guest_stride);
 				unsigned const row_rest  = VMM_MIN(length, guest_stride - unaligned);
 
 				/* since whole row not available to fn, copy w/o fn invocation */
@@ -270,14 +270,14 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				}
 
 				unsigned const max_row = length / guest_stride;
-				unsigned const guest_y = (resource_offset + row_rest) / guest_stride;
+				unsigned const guest_y = unsigned((resource_offset + row_rest) / guest_stride);
 				for (unsigned row = 0; row < max_row; row ++) {
 #if 0
 					memcpy(reinterpret_cast<void *>(vmm_ptr   + row * vmm_stride),
 					       reinterpret_cast<void *>(from_guest + row * guest_stride),
 					       guest_stride);
 #else
-					bool loop_continue = fn(vmm_ptr    + row * vmm_stride,
+					bool loop_continue = fn(uintptr_t(vmm_ptr + row * vmm_stride),
 					                        from_guest + row * guest_stride,
 					                        guest_y    + row);
 					if (!loop_continue)
@@ -311,7 +311,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 	public:
 
-		unsigned const console_id { 1 };
+		uint16 const console_id { 1 };
 		unsigned mode_width  { };
 		unsigned mode_height { };
 		unsigned mode_width_next  { };
@@ -352,7 +352,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = msg.phys - _phys_bar_base;
+			auto const offset = unsigned(msg.phys - _phys_bar_base);
 
 			switch (offset) {
 			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
@@ -611,7 +611,7 @@ size_t Virtio_gpu::_gpu_create_2d(uintptr_t request,  size_t request_size,
 		MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW,
 		                   console_id,
 		                   create_2d.width * create_2d.height * 4); /* XXX */
-		msg.view = 2 + create_2d.resource_id; /* XXX */
+		msg.view = uint16(2 + create_2d.resource_id); /* XXX */
 		_bus_console.send(msg);
 
 		if (!msg.ptr || !create_resource_2d([&](auto &resource){
@@ -634,7 +634,8 @@ size_t Virtio_gpu::_gpu_create_2d(uintptr_t request,  size_t request_size,
 
 		if (changed) {
 			MessageConsole msg(MessageConsole::TYPE_RESOLUTION_CHANGE, console_id);
-			msg.view = msg.x = msg.y = 0;
+			msg.view = 0;
+			msg.x = msg.y = 0;
 			msg.width  = create_2d.width;
 			msg.height = create_2d.height;
 			_bus_console.send(msg);
@@ -1062,9 +1063,13 @@ PARAM_HANDLER(virtio_gpu,
 	      "Example: 'virtio_gpu:,13'.",
 	      "If no bdf is given a free one is used.")
 {
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	if (bdf >= 1u << 16)
+		Logging::panic("virtio_gpu: invalid bdf\n");
+
 	Virtio_gpu *dev = new Virtio_gpu(mb.bus_irqlines, mb.bus_memregion,
-	                                 mb.bus_console, argv[1],
-	                                 PciHelper::find_free_bdf(mb.bus_pcicfg, argv[0]));
+	                                 mb.bus_console, uint8(argv[1]),
+	                                 uint16(bdf));
 
 	mb.bus_pcicfg .add(dev, Virtio_gpu::receive_static<MessagePciConfig>);
 	mb.bus_mem    .add(dev, Virtio_gpu::receive_static<MessageMem>);
@@ -1096,6 +1101,6 @@ PARAM_HANDLER(virtio_gpu,
 	msg2.view = 1;
 	if (mb.bus_console.send(msg2)) {
 		dev->shape_ptr  = uintptr_t(msg2.ptr);
-		dev->shape_size = msg2.size;
+		dev->shape_size = unsigned(msg2.size);
 	}
 }

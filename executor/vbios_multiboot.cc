@@ -94,8 +94,8 @@ private:
     MessageHostOp msg1(MessageHostOp::OP_GUEST_MEM, 0UL);
     if (!(_mb.bus_hostop.send(msg1))) Logging::panic("could not find base address %x\n", 0);
     char *physmem = msg1.ptr;
-    size_t memsize = msg1.len;
-    size_t offset = _modaddr;
+    auto memsize = msg1.len;
+    auto offset = _modaddr;
     unsigned long mbi = 0;
     Mbi *m = 0;
 
@@ -117,20 +117,20 @@ private:
 	    if (offset > memsize)  return 0;
 	    memset(m, 0, sizeof(*m));
 	    memmove(physmem + offset, msg2.cmdline, msg2.cmdlen);
-	    m->cmdline = offset;
+	    m->cmdline = unsigned(offset);
 	    offset += msg2.cmdlen;
 	    m->flags |= MBI_FLAG_CMDLINE;
 	    break;
 	  default:
 	    {
 	      m->flags |= MBI_FLAG_MODS;
-	      m->mods_addr = reinterpret_cast<char *>(m + 1) - physmem;
+	      m->mods_addr = unsigned(reinterpret_cast<char *>(m + 1) - physmem);
 	      Module *mod = reinterpret_cast<Module *>(physmem + m->mods_addr) + m->mods_count;
 	      m->mods_count++;
-	      mod->mod_start = msg2.start - physmem;
-	      mod->mod_end = mod->mod_start + msg2.size;
-	      mod->string = msg2.cmdline - physmem;
-	      mod->reserved = msg2.cmdlen;
+	      mod->mod_start = unsigned(msg2.start - physmem);
+	      mod->mod_end = unsigned(mod->mod_start + msg2.size);
+	      mod->string = unsigned(msg2.cmdline - physmem);
+	      mod->reserved = unsigned(msg2.cmdlen);
 	      if (offset < mod->mod_end) offset = mod->mod_end;
 	      if (offset < mod->string + msg2.cmdlen) offset = mod->string + msg2.cmdlen;
 	    }
@@ -148,8 +148,8 @@ private:
 		       {20, _lowmem, 0xa0000 - _lowmem, 2},
 		       {20, 1<<20, memsize - (1<<20), 0x1}};
     m->mem_lower = 640;
-    m->mem_upper = (memsize >> 10) - 1024;
-    m->mmap_addr  = offset;
+    m->mem_upper = unsigned((memsize >> 10) - 1024);
+    m->mmap_addr = unsigned(offset);
     m->mmap_length = sizeof(mymap);
     m->flags |= MBI_FLAG_MMAP | MBI_FLAG_MEM;
     memcpy(physmem + m->mmap_addr, mymap, m->mmap_length);
@@ -171,9 +171,9 @@ private:
     if (!(mbi = init_mbi(rip)))  return false;
 
     msg.cpu->clear();
-    msg.cpu->eip      = rip;
+    msg.cpu->ripx     = rip;
     msg.cpu->eax      = 0x2badb002;
-    msg.cpu->ebx      = mbi;
+    msg.cpu->ebx      = unsigned(mbi);
     msg.cpu->cr0      = 0x11;
     msg.cpu->cs.ar    = 0xc9b;
     msg.cpu->cs.limit = 0xffffffff;
@@ -210,7 +210,7 @@ PARAM_HANDLER(vbios_multiboot,
 {
   mb.bus_bios.add(new VirtualBiosMultiboot(mb,
 					   argv[0]!= ~0ul ? argv[0] : _vbios_multiboot_modaddr,
-					   argv[1]!= ~0ul ? argv[1] : 0xa0000),
+					   argv[1]!= ~0ul ? unsigned(argv[1]) : 0xa0000),
 		  VirtualBiosMultiboot::receive_static);
 }
  

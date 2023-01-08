@@ -46,12 +46,12 @@ PARAM_HANDLER(dio,
 	      "Forward access to given ioports to the hardware ones.",
 	      "Please note that a 'ioio' as backend for this device is needed too.")
 {
-  unsigned short base = argv[0];
+  unsigned short base = static_cast<unsigned short>(argv[0]);
   unsigned short order;
   if ( argv[1] == ~0UL)
     order = 1;
   else
-    order = Cpu::bsr(argv[1] | 1);
+    order = static_cast<unsigned short>(Cpu::bsr(argv[1] | 1));
 
   // request the io ports
   MessageHostOp msg(MessageHostOp::OP_ALLOC_IOIO_REGION, (base << 8) |  order);

@@ -82,7 +82,7 @@ struct CpuMessage {
   CpuMessage(Type _type, CpuState *_cpu, unsigned _mtr_in) : type(_type), cpu(_cpu), mtr_in(_mtr_in) { if (type == TYPE_CPUID) cpuid_index = cpu->eax; }
   CpuMessage(unsigned _nr, unsigned _reg, unsigned _mask, unsigned _value) : type(TYPE_CPUID_WRITE), nr(_nr), reg(_reg), mask(_mask), value(_value), mtr_in(0) {}
   CpuMessage(bool is_in, CpuState *_cpu, unsigned _io_order, unsigned _port, void *_dst, unsigned _mtr_in)
-  : type(is_in ? TYPE_IOIN : TYPE_IOOUT), cpu(_cpu), io_order(_io_order), port(_port), dst(_dst), mtr_in(_mtr_in) {}
+  : type(is_in ? TYPE_IOIN : TYPE_IOOUT), cpu(_cpu), io_order(_io_order), port(static_cast<unsigned short>(_port)), dst(_dst), mtr_in(_mtr_in) {}
 };
 
 
@@ -170,16 +170,16 @@ public:
   /**
    * Add a copy-in/out request to the parameters.
    */
-  void add_param(unsigned long address, unsigned count, bool read) {
+  void add_param(unsigned long address, unsigned short count, bool read) {
     assert (params_used < (sizeof(shmem.params) / sizeof(Parameter)));
     GuestPtr &src = read ? shmem.params[params_used].src : shmem.params[params_used].dst;
     GuestPtr &dst = read ? shmem.params[params_used].dst : shmem.params[params_used].src;
     shmem.params[params_used].count = count;
-    src.seg = address >> 4;
-    src.ofs = address - (src.seg << 4);
+    src.seg = uint16(address >> 4);
+    src.ofs = uint16(address - (src.seg << 4));
     unsigned long shmem_ptr = get_shmem_ptr();
-    dst.seg = shmem_ptr >> 4;
-    dst.ofs = shmem_ptr - (dst.seg << 4);
+    dst.seg = uint16(shmem_ptr >> 4);
+    dst.ofs = uint16(shmem_ptr - (dst.seg << 4));
     params_used++;
   }
 
@@ -187,7 +187,7 @@ public:
    * Check whether some copyin-parameters are already available and change address accordingly.  Add a copy-in/out
    * request otherwise.
    */
-  bool check_params(unsigned long &address, unsigned count, bool read) {
+  bool check_params(unsigned long &address, unsigned short count, bool read) {
     if (!params_used)
       return true;
     if (read) {
@@ -212,7 +212,7 @@ public:
   /**
    * Make VCPU-local guest memory available to a model.  This includes the LAPIC and the Shmem-BIOS area.
    */
-  bool copy_inout(unsigned long address, void *ptr, unsigned count, bool read)
+  bool copy_inout(unsigned long address, void *ptr, unsigned short count, bool read)
   {
 //    Logging::printf("copy_%s(%lx, %x) %d\n", read ? "in" : "out", address, count, params_used);
     if (!check_params(address, count, read)) return false;
@@ -225,7 +225,7 @@ public:
 	unsigned value;
 	MessageMem msg(true, address & ~3, &value);
 	if (!mem.send(msg, true)) return false;
-	unsigned l = 4 - (address & 3);
+	unsigned short l = 4 - (address & 3);
 	if (l > count) l = count;
 	memcpy(reinterpret_cast<char *>(&value) + (address & 3), p, l);
 	if (!read) {
@@ -261,8 +261,8 @@ public:
       memcpy(msg.ptr + (address - (msg.start_page << 12)), ptr, count);
     return true;
   }
-  bool copy_in(unsigned long address, void *ptr, unsigned count)  { return copy_inout(address, ptr, count, true);  }
-  bool copy_out(unsigned long address, void *ptr, unsigned count) { return copy_inout(address, ptr, count, false); }
+  bool copy_in(unsigned long address, void *ptr, unsigned short count)  { return copy_inout(address, ptr, count, true);  }
+  bool copy_out(unsigned long address, void *ptr, unsigned short count) { return copy_inout(address, ptr, count, false); }
 
   unsigned long long inj_count;
   VCpu (VCpu *last) : _last(last), inj_count(0) {}

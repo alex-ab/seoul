@@ -132,8 +132,8 @@ public:
     for (unsigned i=0; i < count_bars(bdf); i++) {
       bool is64bit = false;
       unsigned long long lsize = 0;
-      base[i] = vf_bar_base_size(bdf, vf_no, i, lsize, &is64bit);
-      size[i] = lsize;
+      base[i] = static_cast<unsigned long>((vf_bar_base_size(bdf, vf_no, i, lsize, &is64bit)));
+      size[i] = static_cast<unsigned long>(lsize);
       if (is64bit) i++;
     }
 
@@ -152,7 +152,7 @@ private:
       if (!bases[i]) continue;
       if ((bases[i] & 1) == 1) {
 	_barinfo[i].io   = true;
-	_barinfo[i].port = bases[i] & BAR_IO_MASK;
+	_barinfo[i].port = uint16(bases[i] & BAR_IO_MASK);
 
 	MessageHostOp msg(MessageHostOp::OP_ALLOC_IOIO_REGION, (_barinfo[i].port << 8) |  Cpu::bsr(sizes[i] | 0x3));
 	_mb.bus_hostop.send(msg);
@@ -169,16 +169,19 @@ private:
   }
 
 
-  bool match_iobars(unsigned short port, unsigned short &newport, unsigned size) {
-
+  bool match_iobars(uint16 const port, uint16 &newport, unsigned size) const
+  {
     // optimize access
     if (port < 0x100) return false;
 
     // check whether io decode is disabled
     if (~_cfgspace[1] & 1) return false;
-    for (unsigned i=0; i < _bar_count; i++) {
-      if (!_barinfo[i].io || !in_range(port, _cfgspace[BAR0 + i] & BAR_IO_MASK, _barinfo[i].size - size + 1)) continue;
-      newport = _barinfo[i].port | (port & (_barinfo[i].size-1));
+
+    for (unsigned i = 0; i < _bar_count; i++) {
+      if (!_barinfo[i].io || !in_range(port, _cfgspace[BAR0 + i] & BAR_IO_MASK, _barinfo[i].size - size + 1))
+        continue;
+
+      newport = uint16(_barinfo[i].port | (port & (_barinfo[i].size-1)));
       return true;
     }
     return false;
@@ -188,7 +191,7 @@ private:
    * Check whether the guest mem address matches and translate to host pointer
    * address.
    */
-  unsigned match_bars(unsigned long address, unsigned size, unsigned *&ptr) {
+  unsigned match_bars(uint64 const address, unsigned size, unsigned *&ptr) {
 
     COUNTER_INC("PCIDirect::match");
 
@@ -214,8 +217,11 @@ private:
 
   bool receive(MessageIOIn &msg)
   {
-    unsigned old_port = msg.port;
-    if (!match_iobars(old_port, msg.port, 1 << msg.type))  return false;
+    auto const old_port = msg.port;
+
+    if (!match_iobars(old_port, msg.port, 1 << msg.type))
+      return false;
+
     bool res = _mb.bus_hwioin.send(static_cast<MessageHwIOIn&>(msg), true);
     msg.port = old_port;
     return res;
@@ -224,8 +230,11 @@ private:
 
   bool receive(MessageIOOut &msg)
   {
-    unsigned old_port = msg.port;
-    if (!match_iobars(old_port, msg.port, 1 << msg.type))  return false;
+    auto const old_port = msg.port;
+
+    if (!match_iobars(old_port, msg.port, 1 << msg.type))
+      return false;
+
     bool res = _mb.bus_hwioout.send(static_cast<MessageHwIOOut&>(msg), true);
     msg.port = old_port;
     return res;
@@ -258,7 +267,7 @@ private:
     // WRITE
     unsigned mask = ~0u;
     if (!msg.dword) mask = 0;
-    if (in_range(msg.dword, BAR0, MAX_BAR)) mask = ~(_barinfo[msg.dword - BAR0].size - 1);
+    if (in_range(msg.dword, BAR0, MAX_BAR)) mask = unsigned(~(_barinfo[msg.dword - BAR0].size - 1));
     if (_msi_cap) {
       if (msg.dword == _msi_cap) mask = 0x10000;  // only the MSI enable bit can be toggled
       if (msg.dword == (_msi_cap + 1)) mask = ~3u;
@@ -375,7 +384,7 @@ private:
 
       if (msg.count == 0) return false;
 
-      unsigned msix_size = (16*_irq_count + 0xfff) & ~0xffful;
+      unsigned msix_size = unsigned((16*_irq_count + 0xfff) & ~0xffful);
       unsigned msix_offset = _cfgspace[1 + _msix_cap] & ~0x7;
       if (i == _msix_bar) {
 	unsigned long offset = (msg.page << 12) - (_cfgspace[BAR0 + i] & BAR_MEM_MASK);
@@ -389,7 +398,7 @@ private:
 	  msg.ptr        += shift;
 	}
       }
-      Logging::printf(" MAP %u %lx+%x from %p size %lx page %lx %x\n", i, msg.start_page << 12, msg.count << 12, msg.ptr, _barinfo[i].size, msg.page, _cfgspace[BAR0 + i]);
+      Logging::printf(" MAP %u %lx+%lx from %p size %lx page %lx %x\n", i, msg.start_page << 12, msg.count << 12, msg.ptr, _barinfo[i].size, msg.page, _cfgspace[BAR0 + i]);
       return true;
     }
     return false;
@@ -458,7 +467,7 @@ private:
       _cfgspace[0] = vf_device_id(parent_bdf);
       Logging::printf("Our device ID is %04x.\n", _cfgspace[0]);
       for (unsigned i = 0; i < MAX_BAR; i++)
-        _cfgspace[i + BAR0] = bases[i];
+        _cfgspace[i + BAR0] = unsigned(bases[i]);
     }
 
     _msi_cap  = use_irqs ? find_cap(_hostbdf, CAP_MSI) : 0;
@@ -515,11 +524,11 @@ PARAM_HANDLER(dpci,
 )
 {
   HostPci  pci(mb.bus_hwpcicfg);
-  unsigned hostbdf  = pci.search_device(argv[0], argv[1], argv[2]);
+  unsigned hostbdf  = pci.search_device(unsigned(argv[0]), unsigned(argv[1]), unsigned(argv[2]));
   Logging::printf("search_device(%lx,%lx,%lx) bdf %x \n", argv[0], argv[1], argv[2], hostbdf);
   check0(!hostbdf, "dpci device not found");
-  new DirectPciDevice(mb, hostbdf, argv[3], argv[4], argv[5], 0, 0,
-		      (~argv[6] == 0) ? unsigned(DirectPciDevice::MAP_MODE_SAFE) : argv[6]);
+  new DirectPciDevice(mb, hostbdf, unsigned(argv[3]), argv[4], argv[5], 0, 0,
+                      unsigned((~argv[6] == 0) ? uint64(DirectPciDevice::MAP_MODE_SAFE) : argv[6]));
 }
 
 #include "host/hostvf.h"
@@ -529,7 +538,6 @@ PARAM_HANDLER(vfpci,
 	      "If no guest_bdf is given, a free one is used.")
 {
   HostVfPci pci(mb.bus_hwpcicfg);
-  unsigned vf_no      = argv[2];
 
   // Find parent BDF
   uint16 parent_bdf = 0;
@@ -539,16 +547,17 @@ PARAM_HANDLER(vfpci,
     unsigned cfg0 = pci.conf_read(bdf, 0x0);
     if (cfg0 == argv[0]) {
       if (found++ == argv[1]) {
-	parent_bdf = bdf;
-	break;
+        parent_bdf = uint16(bdf);
+        break;
       }
     }
   }
 
   // Check if VF exists, before creating the object.
-  unsigned vf_bdf = pci.vf_bdf(parent_bdf, vf_no);
+  auto const vf_no  = unsigned(argv[2]);
+  auto const vf_bdf = pci.vf_bdf(parent_bdf, vf_no);
   check0(!vf_bdf, "XXX VF%d does not exist in parent %x.", vf_no, parent_bdf);
   Logging::printf("VF is at %04x.\n", vf_bdf);
 
-  new DirectPciDevice(mb, 0, argv[3], true, true, parent_bdf, vf_no);
+  new DirectPciDevice(mb, 0, unsigned(argv[3]), true, true, parent_bdf, vf_no);
 }

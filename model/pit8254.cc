@@ -80,17 +80,17 @@ class PitCounter : public StaticReceiver<PitCounter>
     return (features[(_modus >> 1) & 0x7] & f) == f;
   };
 
-  unsigned short s2bcd(unsigned short value)
+  uint16 s2bcd(uint16 value) const
   {
     if (_modus & BCD)
-      value = (((value / 1000) % 10) << 12) + (((value / 100) % 10) << 8) + (((value / 10) % 10) << 4) +  value % 10;
+      value = uint16((((value / 1000) % 10) << 12) + (((value / 100) % 10) << 8) + (((value / 10) % 10) << 4) +  value % 10);
     return value;
   }
 
-  unsigned short bcd2s(unsigned short value)
+  uint16 bcd2s(uint16 value) const
   {
     if (_modus & BCD)
-      value =  ((value & 0xf000) >> 12) * 1000 + ((value & 0xf00) >> 8) * 100 + ((value & 0xf0) >> 4) * 10 + (value & 0xf);
+      value = uint16(((value & 0xf000) >> 12) * 1000 + ((value & 0xf00) >> 8) * 100 + ((value & 0xf0) >> 4) * 10 + (value & 0xf));
     return value;
   }
 
@@ -98,7 +98,7 @@ class PitCounter : public StaticReceiver<PitCounter>
   void load_counter()
     {
       _initial = _new_counter ? _new_counter : 65536;
-      _modus &= ~NULL_COUNT;
+      _modus &= uint16(~NULL_COUNT);
     }
 
 
@@ -144,7 +144,7 @@ class PitCounter : public StaticReceiver<PitCounter>
     if (feature(FPERIODIC) && (res <= 0)) res = _initial + (res % _initial);
     if (feature(FSQUARE_WAVE))            res = ((res*2 % _initial+1) + (~_initial & 1)) & ~1;
     if (_modus & BCD)                     res = 10000 + (res % 10000);
-    return res;
+    return uint16(res);
   }
 
   void reload_counter()
@@ -165,13 +165,18 @@ class PitCounter : public StaticReceiver<PitCounter>
     unsigned short counter = get_counter();
     if (!(value & 0x20) && !_lstatus)
       {
-	_latched_status = (_modus & 0x7f) | (get_out() << 7);
+	_latched_status = uint8((_modus & 0x7f) | (get_out() << 7));
 	_lstatus = 1;
       }
     if (!(value & 0x10) && !_latched)
       {
 	_latch = counter;
-	_latched = ((_modus & (RW_LOW | RW_HIGH))/RW_LOW);
+	switch (((_modus & (RW_LOW | RW_HIGH))/RW_LOW)) {
+	case 0: _latched = 0; break;
+	case 1: _latched = 1; break;
+	case 2: _latched = 2; break;
+	case 3: _latched = 3; break;
+	default: Logging::panic("unkown state"); break; }
       }
   }
 
@@ -185,7 +190,7 @@ class PitCounter : public StaticReceiver<PitCounter>
       {
 	if ((modus & 0xe) <= 10)
 	  {
-	    _modus = (_modus & ~0x3f) | (modus & 0x3f) | NULL_COUNT;
+	    _modus = uint16((_modus & ~0x3f) | (modus & 0x3f) | NULL_COUNT);
 	    _start = 0;
 	    disable_counting();
 	    _stopped_out = (_modus & 0xe) != 0;
@@ -206,7 +211,7 @@ class PitCounter : public StaticReceiver<PitCounter>
   void set_gate(unsigned char value)
   {
     if (value == _gate)  return;
-    _gate = value;
+    _gate = !!value;
 
     if (!value && feature(FGATE_DISABLE_COUNTING))  disable_counting();
     if (value)
@@ -255,25 +260,25 @@ class PitCounter : public StaticReceiver<PitCounter>
       }
     else if (_latched & 1)
       {
-	value = s2bcd(_latch) & 0xff;
+	value = uint8(s2bcd(_latch) & 0xff);
 	_latched--;
       }
     else if (_latched & 2)
       {
-	value = (s2bcd(_latch) >> 8) & 0xff;
+	value = uint8((s2bcd(_latch) >> 8) & 0xff);
 	_latched = 0;
       }
     else if (_read_low)
       {
-	value = (s2bcd(get_counter()) >> 8) & 0xff;
+	value = uint8((s2bcd(get_counter()) >> 8) & 0xff);
 	_read_low = 0;
       }
     else
       {
 	if (_modus & RW_LOW)
-	  value = s2bcd(get_counter()) & 0xff;
+	  value = uint8(s2bcd(get_counter()) & 0xff);
 	else
-	  value = (s2bcd(get_counter()) >> 8) & 0xff;
+	  value = uint8((s2bcd(get_counter()) >> 8) & 0xff);
 	if ((_modus & (RW_LOW | RW_HIGH)) == (RW_LOW | RW_HIGH))
 	  _read_low = 1;
       }
@@ -336,7 +341,7 @@ class PitCounter : public StaticReceiver<PitCounter>
     if (msg.nr == _timer)
       {
 	// a timeout has triggerd
-	MessageIrqLines msg1(MessageIrq::ASSERT_NOTIFY, _irq);
+	MessageIrqLines msg1(MessageIrq::ASSERT_NOTIFY, uint8(_irq));
 	_bus_irq->send(msg1);
 	return true;
       }
@@ -430,14 +435,14 @@ class PitDevice : public StaticReceiver<PitDevice>
 	   for (unsigned i=0; i < COUNTER; i++)
 	     if (msg.value & (1<<(i+1)))
 	       {
-		 _c[i].read_back(msg.value);
+		 _c[i].read_back(uint8(msg.value));
 	       }
 	 }
        else
-	 _c[(msg.value >> 6) & 3].set_modus(msg.value);
+	 _c[(msg.value >> 6) & 3].set_modus(uint8(msg.value));
        return true;
      }
-   _c[msg.port - _base].write(msg.value);
+   _c[msg.port - _base].write(uint8(msg.value));
    return true;
  }
 
@@ -488,10 +493,7 @@ PARAM_HANDLER(pit,
 	      "Example: 'pit:0x40,0'")
 {
   static unsigned pit_count;
-  PitDevice *dev = new PitDevice(mb,
-				 argv[0],
-				 argv[1],
-				 pit_count++);
+  PitDevice *dev = new PitDevice(mb, uint16(argv[0]), uint32(argv[1]), pit_count++);
 
   mb.bus_ioin.add(dev,  PitDevice::receive_static<MessageIOIn>);
   mb.bus_ioout.add(dev, PitDevice::receive_static<MessageIOOut>);

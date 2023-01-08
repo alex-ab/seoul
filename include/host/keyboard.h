@@ -128,7 +128,7 @@ public:
       0x7e, 0x62,
     };
 
-    unsigned char key = scancode;
+    unsigned char key = static_cast<unsigned char>(scancode);
     if (scancode & KBFLAG_EXTEND1 && key == 0x77)
       return 0x62;
     if (scancode & KBFLAG_EXTEND0)

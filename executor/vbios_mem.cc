@@ -80,11 +80,11 @@ class VirtualBiosMem : public StaticReceiver<VirtualBiosMem>, public BiosCommon
 		{
 		case 0:
 		  mmap.base = 0;
-		  mmap.size = read_bda(0x13) << 10;
+		  mmap.size = read_bda<unsigned>(0x13) << 10;
 		  cpu->ebx++;
 		  break;
 		case 1:
-		  mmap.base = read_bda(0x13) << 10;
+		  mmap.base = read_bda<unsigned>(0x13) << 10;
 		  mmap.size = 0xa0000 - mmap.base;
 		  mmap.type = 2;
 		  cpu->ebx++;
@@ -112,9 +112,9 @@ class VirtualBiosMem : public StaticReceiver<VirtualBiosMem>, public BiosCommon
 	}
       case 0x8800 ... 0x88ff: // get extended memory
         {
-          unsigned mem_kb = (memsize() - (1<<20)) / 1024;
+          auto const mem_kb = (memsize() - (1<<20)) / 1024;
           // Cap at 15MB for legacy compatibility.
-          cpu->ax = (mem_kb > (15*1024)) ? 15*1024 : mem_kb;
+          cpu->ax = (mem_kb > (15*1024)) ? 15*1024 : static_cast<unsigned short>(mem_kb);
           break;
         }
       case 0x00c0:            // get rom configtable
@@ -144,7 +144,7 @@ public:
       msg.mtr_out |= MTD_GPR_ACDB;
       return true;
     case 0x12: // get low memory
-      msg.cpu->ax = read_bda(0x13);
+      msg.cpu->ax = read_bda<unsigned short>(0x13);
       msg.mtr_out |= MTD_GPR_ACDB;
       return true;
     case 0x15:  return handle_int15(msg);

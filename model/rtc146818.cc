@@ -68,7 +68,7 @@ class Rtc146818 : public StaticReceiver<Rtc146818>
    * Read values from RAM and convert time information from BCD and
    * 12h format.
    */
-  unsigned char ram(unsigned char index)
+  unsigned char ram(unsigned const index)
   {
     assert(index < sizeof(_ram));
     assert(index < 0xa || index == 0x32);
@@ -128,7 +128,7 @@ class Rtc146818 : public StaticReceiver<Rtc146818>
     if ((_ram[0xb] & _ram[0xc]) & 0x70)  _ram[0xc] |= 0x80;
     if (( oldvalue ^ _ram[0xc]) & 0x80)
       {
-	MessageIrqLines msg((_ram[0xc] & 0x80) ? MessageIrq::ASSERT_NOTIFY : MessageIrq::DEASSERT_IRQ, _irq);
+	MessageIrqLines msg((_ram[0xc] & 0x80) ? MessageIrq::ASSERT_NOTIFY : MessageIrq::DEASSERT_IRQ, uint8(_irq));
 	_bus_irqlines.send(msg);
       }
   }
@@ -156,21 +156,21 @@ class Rtc146818 : public StaticReceiver<Rtc146818>
   {
     struct tm_simple tm;
     gmtime(seconds, &tm);
-    _ram[0] = convert_bcd(tm.sec);
-    _ram[2] = convert_bcd(tm.min);
-    _ram[4] = convert_bcd(tm.hour);
+    _ram[0] = convert_bcd(uint8(tm.sec));
+    _ram[2] = convert_bcd(uint8(tm.min));
+    _ram[4] = convert_bcd(uint8(tm.hour));
     if (~_ram[0xb] & 2)
       {
 	unsigned char pm = (tm.hour >= 12) << 7;
 	tm.hour %= 12;
 	if (!tm.hour) tm.hour = 12;
-	_ram[4] = pm | convert_bcd(tm.hour);
+	_ram[4] = pm | convert_bcd(uint8(tm.hour));
       }
-    _ram[6] = convert_bcd(tm.wday);
-    _ram[7] = convert_bcd(tm.mday);
-    _ram[8] = convert_bcd(tm.mon);
-    _ram[9] = convert_bcd(tm.year % 100);
-    _ram[0x32] = convert_bcd(tm.year / 100);
+    _ram[6] = convert_bcd(uint8(tm.wday));
+    _ram[7] = convert_bcd(uint8(tm.mday));
+    _ram[8] = convert_bcd(uint8(tm.mon));
+    _ram[9] = convert_bcd(uint8(tm.year % 100));
+    _ram[0x32] = convert_bcd(uint8(tm.year / 100));
 
     // update ended, set flag
     set_irqflags(_ram[0xc] | 0x10);
@@ -215,7 +215,7 @@ class Rtc146818 : public StaticReceiver<Rtc146818>
     seconds++;
 
     // split the current time in multiple of periods (seconds) and the remainder (now)
-    unsigned now = Math::moddiv<timevalue>(seconds, period);
+    unsigned now = unsigned(Math::moddiv<timevalue>(seconds, period));
 
     // is the next alarm in the future?
     if (now <= start)  return seconds * period + start;
@@ -365,12 +365,12 @@ public:
 	switch (_index)
 	  {
 	  case 0x0:
-	    _ram[_index] = (_ram[_index] & 0x80) | (msg.value & 0x7f);
+	    _ram[_index] = uint8((_ram[_index] & 0x80) | (msg.value & 0x7f));
 	    break;
 	  case 0xa:
 	    {
 	      bool toggled_reset = ((_ram[0xa] & 0x60) == 0x60) && ((msg.value & 0x60) != 0x60);
-	      _ram[_index] = msg.value;
+	      _ram[_index] = uint8(msg.value);
 	      if (toggled_reset)
 		{
 		  // switch from reset to non-reset mode, the next update is a half second later...
@@ -389,7 +389,7 @@ public:
 	      _last = _clock.clock(FREQ);
 	    // Fallthrough
 	  default:
-	    _ram[_index] = msg.value;
+	    _ram[_index] = uint8(msg.value);
 	  }
 	if (_index < 0xc)  update_timer(get_ram_time(), get_counter());
 	if (_index == 0xb) set_irqflags(_ram[0xc]);
@@ -429,7 +429,7 @@ PARAM_HANDLER(rtc,
   if (!mb.bus_timer.send(msg0))
     Logging::panic("%s can't get a timer", __PRETTY_FUNCTION__);
 
-  Rtc146818 *rtc = new Rtc146818(mb.bus_timer, mb.bus_irqlines, *mb.clock(), msg0.nr, argv[0],argv[1]);
+  Rtc146818 *rtc = new Rtc146818(mb.bus_timer, mb.bus_irqlines, *mb.clock(), msg0.nr, uint16(argv[0]), unsigned(argv[1]));
   MessageTime msg1;
   if (!mb.bus_time.send(msg1))
     Logging::printf("could not get wallclock time!\n");

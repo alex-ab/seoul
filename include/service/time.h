@@ -26,20 +26,20 @@
  * An appreviated broken down time.
  */
 struct tm_simple {
-  int sec;
-  int min;
-  int hour;
-  int mday;
-  int mon;
-  int year;
-  int wday;
-  int yday;
-  int isdsdt;
-  tm_simple() : sec(0), min(0), hour(0), mday(0), mon(0), year(0), wday(0), yday(0), isdsdt(0) {};
-  tm_simple(int _year, int _mon, int _mday, int _hour, int _min, int _sec) : sec(_sec), min(_min), hour(_hour), mday(_mday), mon(_mon), year(_year), wday(0), yday(0), isdsdt(0) {}
+  timevalue sec;
+  timevalue min;
+  timevalue hour;
+  timevalue mday;
+  timevalue mon;
+  timevalue year;
+  timevalue wday;
+  timevalue yday;
+
+  tm_simple() : sec(0), min(0), hour(0), mday(0), mon(0), year(0), wday(0), yday(0) {};
+  tm_simple(int _year, int _mon, int _mday, int _hour, int _min, int _sec) : sec(_sec), min(_min), hour(_hour), mday(_mday), mon(_mon), year(_year), wday(0), yday(0) {}
 };
 
-static inline bool is_leap(int year) { return (!(year & 3) && ((year % 100) != 0)) || (year % 400 == 0); }
+static inline bool is_leap(timevalue year) { return (!(year & 3) && ((year % 100) != 0)) || (year % 400 == 0); }
 
 static inline timevalue mktime(struct tm_simple *tm)
 {
@@ -49,10 +49,10 @@ static inline timevalue mktime(struct tm_simple *tm)
   return ((days*24+tm->hour)*60+tm->min)*60 + tm->sec;
 }
 
-static inline unsigned moddiv(timevalue &value, unsigned divider)
+static inline timevalue moddiv(timevalue &value, unsigned divider)
 {
-  unsigned mod = Math::moddiv<timevalue>(value, divider);
-  unsigned d = value;
+  auto const mod = Math::moddiv<timevalue>(value, divider);
+  auto const   d = value;
   value = mod;
   return d;
 }
@@ -66,13 +66,13 @@ static inline void gmtime(timevalue seconds, struct tm_simple *tm)
   tm->hour      = Math::moddiv<timevalue>(seconds, 24);
   timevalue days= seconds++;
   tm->wday      = Math::moddiv<timevalue>(seconds, 7);
-  unsigned years400 = moddiv(days, 4*36524+1);
-  unsigned years100 = moddiv(days, 36524);
+  auto years400 = moddiv(days, 4*36524+1);
+  auto years100 = moddiv(days, 36524);
   // overflow on a 400year boundary?
   if (years100 == 4) years100--, days += 36524;
 
-  unsigned years4 = moddiv(days, 1461);
-  unsigned years  = moddiv(days, 365);
+  auto years4 = moddiv(days, 1461);
+  auto years  = moddiv(days, 365);
   // overflow on the 4year boundary?
   if (years == 4)  years -= 1, days += 365;
 
@@ -116,7 +116,7 @@ public:
     timevalue abs_stop()  { return _toc; }
 
     // Returns B/ms, which is actually kB/s (if using default frequency)
-    unsigned rate(mword bytes) {
+    timevalue rate(timevalue bytes) {
         if (delta()) return bytes / delta();
         else return 0;
     }

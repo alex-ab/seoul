@@ -32,7 +32,7 @@ private:
   // pdpt cache for 32-bit PAE
   unsigned long long _pdpt[4];
   unsigned long _msr_efer;
-  unsigned _paging_mode;
+  unsigned long _paging_mode;
 
   enum Features {
     FEATURE_PSE        = 1 << 0,
@@ -53,19 +53,21 @@ private:
       if (Cpu::cmpxchg4b(entry->_ptr, pte, pte | bits) != pte) RETRY;	\
     }
 
-  template <unsigned features, typename PTE_TYPE>
+  template <unsigned const features, typename PTE_TYPE>
     static unsigned tlb_fill(MemTlb *tlb, uintptr_t virt, unsigned type, uintptr_t &phys)
   {  return tlb->tlb_fill2<features, PTE_TYPE>(virt, type, phys); }
 
 
-  template <unsigned features, typename PTE_TYPE>
-    unsigned tlb_fill2(uintptr_t virt, unsigned type, uintptr_t &phys)
+  template <unsigned const features, typename PTE_TYPE>
+  unsigned tlb_fill2(uintptr_t virt, unsigned type, uintptr_t &phys)
   {
+    PTE_TYPE rights = TYPE_R | TYPE_W | TYPE_U | TYPE_X;
     PTE_TYPE pte;
-    if (features & FEATURE_SMALL_PDPT) pte = _pdpt[(virt >> 30) & 3]; else pte = READ(cr3);
-    if (features & FEATURE_SMALL_PDPT && ~pte & 1) PF(virt, type & ~1);
+
+    if ( features & FEATURE_SMALL_PDPT) pte = PTE_TYPE(_pdpt[(virt >> 30) & 3]); else pte = PTE_TYPE(READ(cr3));
+    if ( features & FEATURE_SMALL_PDPT && ~pte & 1) PF(virt, type & ~1);
     if (~features & FEATURE_PAE || ~_paging_mode & (1<<11)) type &= ~TYPE_X;
-    unsigned rights = TYPE_R | TYPE_W | TYPE_U | TYPE_X;
+
     unsigned l = features & FEATURE_LONG ? 4 : 2;
     bool is_sp;
     CacheEntry *entry = 0;
@@ -109,8 +111,12 @@ private:
     unsigned size = ((features & FEATURE_PAE) ? 9 : 10) * l + 12;
     if (features & FEATURE_PSE36 && is_sp)
       phys = ((pte >> 22) | ((pte & 0x1fe000) >> 2));
-    else
-      phys = pte >> size;
+    else {
+      if (sizeof(uintptr_t) == 4 && ((pte >> size) >= ((1ull << sizeof(uintptr_t)) * 8)))
+        Logging::panic("memtlb - unsupported size");
+
+      phys = uintptr_t(pte >> size);
+    }
     phys = (phys << size) | (virt & ((1 << size) - 1));
 
     // The upper bits might contain OS specific data which should not
@@ -154,7 +160,7 @@ protected:
 
     _paging_mode = (READ(cr0) & 0x80010000) | (READ(cr4) & 0x30) | (_msr_efer & 0xc00);
 
-    // fetch pdpts in leagacy PAE mode
+    // fetch pdpts in legacy PAE mode
     if ((_paging_mode & 0x80000420) == 0x80000020)
       {
 	unsigned long long values[4];

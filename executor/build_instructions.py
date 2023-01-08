@@ -267,7 +267,10 @@ def print_code(code, functions):
 		 %s; }"""%(funcname, ";".join(functions[funcname]))
 
     print "int handle_code_byte(InstructionCacheEntry *entry, unsigned char code, int &op_mode) {"
-    print "entry->offset_opcode = entry->inst_len;"
+    print "entry->offset_opcode = static_cast<unsigned char>(entry->inst_len);"
+    print "if (entry->offset_opcode >= InstructionCacheEntry::MAX_INSTLEN)"
+    print """  Logging::panic("offset_opcode too large");"""
+    print ""
     print "switch (op_mode) {"
     p = code.keys()
     p.sort()
@@ -324,7 +327,7 @@ opcodes += [
     ("sldt",  ["NO_OS", "OS1"], ["move<1>(tmp_dst, &cache->_cpu->ld.sel)"]),
     ("smsw",  ["NO_OS", "OS1"], ["move<1>(tmp_dst, &cache->_cpu->cr0)"]),
     ("nopl (%eax)",  ["NO_OS", "SKIPMODRM", "MODRM", "DROP1"], [" "]),
-    ("lahf",  ["NO_OS"], ["cache->_cpu->ah = (cache->_cpu->efl & 0xd5) | 2"]),
+    ("lahf",  ["NO_OS"], ["cache->_cpu->ah = static_cast<unsigned char>((cache->_cpu->efl & 0xd5) | 2)"]),
     ("sahf",  ["NO_OS"], ["cache->_cpu->efl = (cache->_cpu->efl & ~0xd5) | (cache->_cpu->ah  & 0xd5)"]),
     ("clflush", ["ASM", "BYTE"], [""]),
     ]
@@ -419,7 +422,7 @@ opcodes += [("imul", ["DIRECTION"], ["unsigned param, result",
 				 "if ([IMM]) param = cache->_entry->immediate; else if ([OP1]) param = cache->_cpu->eax; else move<[os]>(&param, tmp_dst);",
 				 # 'Logging::printf("IMUL %x * %x\\n", param, *reinterpret_cast<unsigned *>(tmp_src))',
 				 'asm volatile ("imul[bwl] (%%\" VMM_EXPAND(VMM_REG(cx)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(cx))  : "+a"(param), "=d"(result), "+c"(tmp_src))',
-				 "cache->_cpu->efl = (cache->_cpu->efl & ~0x8d5) | (reinterpret_cast<unsigned long>(tmp_src)  & 0x8d5)",
+				 "cache->_cpu->rflx = (cache->_cpu->rflx & ~0x8d5) | (reinterpret_cast<unsigned long>(tmp_src)  & 0x8d5)",
 				 "if ([OP1]) move<[os] ? [os] : 1>(&cache->_cpu->eax, &param)",
 				 "if ([OP1] && [os]) move<[os]>(&cache->_cpu->edx, &result)",
 				 "if (![OP1]) move<[os]>(tmp_dst, &param)",
@@ -441,7 +444,7 @@ opcodes += [("mov %es,%edx", ["MODRM", "DROP1"], [
 
 for x in segment_list:
     opcodes += [("push %"+x, [], ["cache->helper_PUSH<[os]>(&cache->_cpu->%s.sel)"%x]),
-		("pop %"+x, [], ["unsigned sel", "cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
+		("pop %"+x, [], ["unsigned short sel", "cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
 		("l"+x, ["SKIPMODRM", "MODRM", "MEMONLY"], ["cache->helper_loadsegment<[os]>(&cache->_cpu->%s)"%x])]
 opcodes += [(x, ["FPU", "FPUNORESTORE", "NO_OS"], [x]) for x in ["fninit"]]
 opcodes += [(x, ["FPU", "NO_OS"], [x+" (%%\" VMM_EXPAND(VMM_REG(cx)) \")"]) for x in ["fnstsw", "fnstcw", "ficom", "ficomp"]]

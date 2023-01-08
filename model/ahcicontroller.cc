@@ -324,7 +324,7 @@ class AhciController : public ParentIrqProvider,
 #define  VMM_REGBASE "../model/ahcicontroller.cc"
 #include "model/reg.h"
 
-  bool match_bar(uintptr_t &address) {
+  bool match_bar(uint64 &address) {
     bool res = !((address ^ PCI_ABAR) & PCI_ABAR_mask);
     address &= ~PCI_ABAR_mask;
     return res;
@@ -334,7 +334,10 @@ class AhciController : public ParentIrqProvider,
  public:
 
   void trigger_irq (void * child) override {
-    unsigned index = reinterpret_cast<AhciPort *>(child) - _ports;
+    auto index = reinterpret_cast<AhciPort *>(child) - _ports;
+    if (index < 0 || index >= MAX_PORTS)
+      Logging::panic("unknown ahci port");
+
     if (~REG_IS & (1 << index))
       {
 	REG_IS |= 1 << index;
@@ -356,7 +359,7 @@ class AhciController : public ParentIrqProvider,
 
   bool receive(MessageMem &msg)
   {
-    uintptr_t addr = msg.phys;
+    auto addr = msg.phys;
     if (!match_bar(addr) || !(PCI_CMD_STS & 0x2))
       return false;
 
@@ -365,7 +368,7 @@ class AhciController : public ParentIrqProvider,
     bool res;
     unsigned uvalue = 0;
     if (addr < 0x100)
-      res = msg.read ? AhciController_read(addr, uvalue) : AhciController_write(addr, *msg.ptr);
+      res = msg.read ? AhciController_read(unsigned(addr), uvalue) : AhciController_write(unsigned(addr), *msg.ptr);
     else if (addr < 0x100+MAX_PORTS*0x80)
       res = msg.read ? _ports[(addr - 0x100) / 0x80].AhciPort_read(addr & 0x7f, uvalue) : _ports[(addr - 0x100) / 0x80].AhciPort_write(addr & 0x7f, *msg.ptr);
     else
@@ -414,7 +417,7 @@ PARAM_HANDLER(ahci,
 	      "The AHCI controllers are automatically numbered, starting with 0."
 	      )
 {
-  AhciController *dev = new AhciController(mb, argv[1], PciHelper::find_free_bdf(mb.bus_pcicfg, argv[2]));
+  AhciController *dev = new AhciController(mb, static_cast<unsigned char>((argv[1])), PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[2])));
   mb.bus_mem.add(dev, AhciController::receive_static<MessageMem>);
 
   // register PCI device
@@ -425,8 +428,8 @@ PARAM_HANDLER(ahci,
 
   // set default state, this is normally done by the BIOS
   // set MMIO region and IRQ
-  dev->PCI_write(AhciController::PCI_ABAR_offset, argv[0]);
-  dev->PCI_write(AhciController::PCI_INTR_offset, argv[1]);
+  dev->PCI_write(AhciController::PCI_ABAR_offset, unsigned(argv[0]));
+  dev->PCI_write(AhciController::PCI_INTR_offset, unsigned(argv[1]));
   // enable IRQ, busmaster DMA and memory accesses
   dev->PCI_write(AhciController::PCI_CMD_STS_offset, 0x406);
 }

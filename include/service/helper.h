@@ -23,7 +23,7 @@
 /**
  * Check whether some address is in a range.
  */
-static inline bool in_range(uintptr_t address, uintptr_t base, size_t size) { return (base <= address) && (address <= base + size - 1); }
+static inline bool in_range(uint64 address, uint64 base, size_t size) { return (base <= address) && (address <= base + size - 1); }
 
 /**
  * Check whether X is true, output an error and return.

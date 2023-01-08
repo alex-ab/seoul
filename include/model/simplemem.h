@@ -45,7 +45,7 @@ bool copy_out(uintptr_t address, void *ptr, size_t count)
     unsigned value;
     MessageMem msg(true, address & ~3, &value);
     if (!_bus_mem->send(msg, true)) return false;
-    unsigned l = 4 - (address & 3);
+    size_t l = 4 - (address & 3);
     if (l > count) l = count;
     memcpy(reinterpret_cast<char *>(&value) + (address & 3), p, l);
     msg.read = false;
@@ -86,7 +86,7 @@ bool copy_in(uintptr_t address, void *ptr, size_t count)
     MessageMem msg(true, address & ~3, &value);
     if (!_bus_mem->send(msg, true)) return false;
     value >>= 8*(address & 3);
-    unsigned l = 4 - (address & 3);
+    size_t l = 4 - (address & 3);
     if (l > count) l = count;
     memcpy(p, &value,  l);
     p       += l;

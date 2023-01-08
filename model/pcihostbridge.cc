@@ -88,7 +88,7 @@ public:
 	MessageLegacy msg2(MessageLegacy::RESET);
 	_mb.bus_legacy.send(msg2);
       }
-      else _cf9 = msg.value;
+      else _cf9 = uint8(msg.value);
       return true;
     }
 
@@ -104,7 +104,7 @@ public:
 
 	// we support unaligned dword accesses here
 	Cpu::move(reinterpret_cast<char *>(&value) + (msg.port & 3), &msg.value, msg.type);
-	MessagePciConfig msg2((_confaddress & ~0x80000000) >> 8, (_confaddress & 0xff) >> 2, value);
+	MessagePciConfig msg2((_confaddress & ~0x80000000) >> 8, (_confaddress & 0xff) >> 2, unsigned(value));
 	if (res) res = _mb.bus_pcicfg.send(msg2);
 	return res;
       }
@@ -120,7 +120,7 @@ public:
   bool  receive(MessageMem &msg) {
     if (!in_range(msg.phys, _membase, _buscount << 20)) return false;
 
-    unsigned bdf = (msg.phys - _membase) >> 12;
+    unsigned bdf = unsigned((msg.phys - _membase) >> 12);
     unsigned dword = (msg.phys & 0xfff) >> 2;
 
     // write
@@ -240,8 +240,8 @@ PARAM_HANDLER(pcihostbridge,
 	      "If not iobase is given, no io-accesses are performed.",
 	      "Similar if membase is not given, MMCFG is disabled.")
 {
-  unsigned busnum = argv[0];
-  PciHostBridge *dev = new PciHostBridge(mb, busnum, argv[1], argv[2], argv[3]);
+  auto const busnum = unsigned(argv[0]);
+  PciHostBridge *dev = new PciHostBridge(mb, busnum, unsigned(argv[1]), uint16(argv[2]), argv[3]);
 
   // ioport interface
   if (~argv[2]) {

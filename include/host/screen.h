@@ -24,9 +24,8 @@ struct Screen
   /**
    * Put a single char to the VGA monitor.
    */
-  static bool vga_putc(long value, unsigned short *base, unsigned &pos)
+  static bool vga_putc(unsigned short value, unsigned short *base, unsigned &pos)
   {
-    if (value < 0) return false;
     bool visible = false;
     switch (value & 0xff)
       {

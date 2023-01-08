@@ -42,7 +42,7 @@ public:
   bool  receive(MessageIOIn &msg) {
 
     if (msg.port != _iobase || msg.type != MessageIOIn::TYPE_INL)  return false;
-    msg.value = _mb.clock()->clock(FREQ);
+    msg.value = unsigned(_mb.clock()->clock(FREQ));
     return true;
   }
 
@@ -69,5 +69,5 @@ PARAM_HANDLER(pmtimer,
 	      "pmtimer:ioport - provide an PMTimer at the given ioport.",
 	      "Example: 'pmtimer:0x8000'.")
 {
-  new PmTimer(mb, argv[0]);
+  new PmTimer(mb, unsigned(argv[0]));
 }

@@ -36,7 +36,7 @@ struct DmaDescriptor
   /**
    * Copy data from an internal buffer to an DMA buffer.
    */
-  static bool copy_inout(char *buffer, unsigned  len, size_t offset,
+  static bool copy_inout(char *buffer, size_t len, size_t offset,
                          size_t dmacount, DmaDescriptor *dma, bool copyout,
                          size_t physoffset, size_t physsize)
   {

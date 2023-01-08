@@ -38,10 +38,10 @@ protected:
   /**
    * Write bios data helper.
    */
-  void write_bda(unsigned short offset, unsigned value, size_t len)
+  void write_bda(unsigned short offset, unsigned value, unsigned len)
   {
     assert(len <= sizeof(value));
-    unsigned x = read_bda(offset);
+    unsigned x = read_bda<unsigned>(offset);
     Cpu::move(&x, &value, len >> 1);
 
     MessageMem msg(false, 0x400 + offset, &x);
@@ -52,12 +52,13 @@ protected:
   /**
    * Read bios data helper.
    */
-  unsigned read_bda(size_t offset)
+  template <typename T>
+  T read_bda(size_t offset)
   {
     unsigned res;
     MessageMem msg(true, 0x400 + offset, &res);
     _mb.bus_mem.send(msg);
-    return res;
+    return static_cast<T>(res);
   }
 
   /**

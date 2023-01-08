@@ -78,13 +78,13 @@ class SystemControlPort : public StaticReceiver<SystemControlPort>
 	    MessageLegacy msg2(MessageLegacy::INIT, 1);
 	    _bus_legacy.send(msg2);
 	  }
-	_last_porta = msg.value;
+	_last_porta = uint8(msg.value);
 	return true;
       }
 
     if (msg.port == _port_b)
       {
-	_last_portb = msg.value;
+	_last_portb = uint8(msg.value);
 	MessagePit msg2(MessagePit::SET_GATE, 2, msg.value & 1);
 	_bus_pit.send(msg2);
 	return true;
@@ -101,7 +101,7 @@ PARAM_HANDLER(scp,
 	      "scp:porta,portb - provide the system control ports A+B.",
 	      "Example: 'scp:0x92,0x61'")
 {
-  SystemControlPort *scp = new SystemControlPort(mb.bus_legacy, mb.bus_pit, argv[0], argv[1]);
+  SystemControlPort *scp = new SystemControlPort(mb.bus_legacy, mb.bus_pit, unsigned(argv[0]), unsigned(argv[1]));
   mb.bus_ioin.add(scp,  SystemControlPort::receive_static<MessageIOIn>);
   mb.bus_ioout.add(scp, SystemControlPort::receive_static<MessageIOOut>);
 }

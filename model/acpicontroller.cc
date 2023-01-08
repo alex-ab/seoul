@@ -82,8 +82,8 @@ class AcpiController : public StaticReceiver<AcpiController>, public BiosCommon
         {
 
             // Activate this event in the appropriate register
-            _gpe0_sts |=  0x00ff & (1 << event_nr);
-            _gpe1_sts |= (0xff00 & (1 << event_nr)) >> 8;
+            _gpe0_sts |= static_cast<unsigned char>(0x00ff & (1 << event_nr));
+            _gpe1_sts |= static_cast<unsigned char>((0xff00 & (1 << event_nr)) >> 8);
 
             // If this event is masked by the guest, then just ignore it
             if (!(_gpe0_sts & _gpe0_en) || !(_gpe1_sts & _gpe1_en))
@@ -229,7 +229,7 @@ class AcpiController : public StaticReceiver<AcpiController>, public BiosCommon
                     }
                     else if (msg.value == CMD_ACPI_DISABLE) {
                         Logging::printf("Disabling ACPI for guest.\n");
-                        _pm1a_control &= ~1U;
+                        _pm1a_control &= 0xfffe;
                     }
                     return true;
 
@@ -258,7 +258,7 @@ class AcpiController : public StaticReceiver<AcpiController>, public BiosCommon
 
                 case PORT_GPE0_STATUS:
                     //Logging::printf("Out on port GPE0 STS: %x len %u\n", msg.value, msg.type);
-                    _gpe0_sts &= ~ static_cast<unsigned char>(msg.value);
+                    _gpe0_sts &= static_cast<unsigned char>(~msg.value);
                     return true;
                 case PORT_GPE0_ENABLE:
                     //Logging::printf("Out on port GPE0 EN %x len %u\n", msg.value, msg.type);
@@ -266,7 +266,7 @@ class AcpiController : public StaticReceiver<AcpiController>, public BiosCommon
                     return true;
                 case PORT_GPE1_STATUS:
                     //Logging::printf("Out on port GPE1 STS: %x\n", msg.value);
-                    _gpe1_sts &= ~ static_cast<unsigned char>(msg.value);
+                    _gpe1_sts &= static_cast<unsigned char>(~msg.value);
                     return true;
                 case PORT_GPE1_ENABLE:
                     //Logging::printf("Out on port GPE1 EN %x\n", msg.value);

@@ -69,7 +69,7 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 #include "model/reg.h"
 
 
-  void update_isr(unsigned value)
+  void update_isr(uint8 const value)
   {
     _regs.isr |= value;
     if (_regs.isr & _regs.imr)
@@ -97,10 +97,10 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	_regs.tsr = 0x20;
 	update_isr(0x10);
       }
-    _regs.cr &= ~4;
+    _regs.cr &= uint8(~4u);
   }
 
-  bool not_accept(const unsigned char *buffer, unsigned len)
+  bool not_accept(const unsigned char *buffer, size_t const len)
   {
     // small packet?
     if ((len < 60 && ~_regs.rcr & 2) || len < 8)  return true;
@@ -117,7 +117,7 @@ class Rtl8029: public StaticReceiver<Rtl8029>
       return (~_regs.rcr & 0x10) && memcmp(buffer, _regs.par, 6) && (~_regs.rcr & 0x10);
   }
 
-  bool receive_packet(const unsigned char *buffer, unsigned len)
+  bool receive_packet(const unsigned char *buffer, size_t len)
   {
     COUNTER_INC("RECV packet");
     // clear status bits, except receiver disabled
@@ -140,8 +140,8 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 
     unsigned start = _regs.curr << 8;
     len += 4;
-    _mem[start + 2] = len ;
-    _mem[start + 3] = len >> 8;
+    _mem[start + 2] = uint8(len);
+    _mem[start + 3] = uint8(len >> 8);
     unsigned space = _regs.pstop - _regs.curr;
     bool overflow = false;
     if (_regs.bnry > _regs.curr) space = _regs.bnry - _regs.curr - 1;
@@ -154,18 +154,18 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	unsigned space2 = (_regs.bnry - _regs.pstart - 1) << 8;
 	memcpy(_mem + start + 4 + space, buffer, space2 < len ? space2 : len - 4);
 	overflow = space2 < len + 4;
-	_regs.curr = _regs.pstart + ((len + 255 + 4) >> 8);
+	_regs.curr = uint8(_regs.pstart + ((len + 255 + 4) >> 8));
       }
     else
       {
 	overflow = space < len;
-	_regs.curr += (len + 4 + 255) >> 8;
+	_regs.curr += uint8((len + 4 + 255) >> 8);
 	if (_regs.curr == _regs.pstop) _regs.curr = _regs.pstart;
       }
     if (overflow)
       {
 	Logging::printf("overflow %x\n", _regs.curr);
-	_regs.curr = start >> 8;
+	_regs.curr = uint8(start >> 8);
 	_regs.cr = 1;
 	update_isr(0x90);
 	return false;
@@ -219,7 +219,7 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	if (_regs.rbcr && ((_regs.cr & 0x38)== 0x10))
 	  {
 	    // the first page is read-only
-	    if (_regs.rsar >= 0x100) _mem[_regs.rsar] = value;
+	    if (_regs.rsar >= 0x100) _mem[_regs.rsar] = uint8(value);
 	    _regs.rsar++;
 	    if (!--_regs.rbcr)  update_isr(0x40);
 	  }
@@ -227,11 +227,11 @@ class Rtl8029: public StaticReceiver<Rtl8029>
     else if (!addr)
       {
 	// keep the transmit bit
-	_regs.cr = value | (_regs.cr & 4);
+	_regs.cr = uint8(value | (_regs.cr & 4));
 	if (~_regs.cr & 0x1)
 	  {
 	    // clear reset indicator
-	    _regs.isr &= ~0x80;
+	    _regs.isr &= uint8(~0x80);
 
 	    // send packet
 	    if ((_regs.cr & 0x5) == 0x4) send_packet();
@@ -245,8 +245,8 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	unsigned reg = addr + (_regs.cr & 0xc0);
 	switch (reg)
 	  {
-	  case 0x3: _regs.bnry = value;   break;
-	  case 0x7: _regs.isr &= ~value | 0x80; break;
+	  case 0x3: _regs.bnry = uint8(value);   break;
+	  case 0x7: _regs.isr &= uint8(~value | 0x80); break;
 	  case 0xd: value &= 0x1f; [[fallthrough]];
 	  case 0xc: value &= 0x3f; [[fallthrough]];
 	  case 0xe:
@@ -255,18 +255,18 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	  case 0x2:
 	  case 0x4 ... 0x6:
 	  case 0x8 ... 0xb:
-	    (&_regs.pstart)[addr - 1] = value;
+	    (&_regs.pstart)[addr - 1] = uint8(value);
 	    break;
 	  case 0x41 ... 0x4f:
-	    _regs.par[addr - 1] = value;
+	    _regs.par[addr - 1] = uint8(value);
 	    break;
 	  }
-	if (reg == 0xc) _regs.rsr = (_regs.rsr & 0xbf) | ((_regs.rcr & 0x20) << 1);
+	if (reg == 0xc) _regs.rsr = uint8((_regs.rsr & 0xbf) | ((_regs.rcr & 0x20) << 1));
 	if (reg == 0xf) update_isr(0);
       }
   }
 
-  bool match_bar(unsigned long &address) {
+  bool match_bar(unsigned &address) {
     bool res = !((address ^ PCI_BAR) & PCI_BAR_mask);
     address &= ~PCI_BAR_mask;
     return res;
@@ -281,7 +281,7 @@ public:
 
   bool receive(MessageIOIn &msg)
   {
-    unsigned long addr = msg.port;
+    unsigned addr = msg.port;
     if (!match_bar(addr) || !(PCI_CMD_STS & 0x1))
       return false;
 
@@ -295,7 +295,7 @@ public:
 
   bool receive(MessageIOOut &msg)
   {
-    unsigned long addr = msg.port;
+    unsigned addr = msg.port;
     if (!match_bar(addr) || !(PCI_CMD_STS & 0x1))
       return false;
 
@@ -336,7 +336,7 @@ PARAM_HANDLER(rtl8029,
 {
   MessageHostOp msg(MessageHostOp::OP_GET_MAC, 0UL);
   if (!mb.bus_hostop.send(msg))  Logging::panic("Could not get a MAC address");
-  Rtl8029 *dev = new Rtl8029(mb.bus_network, mb.bus_irqlines, argv[1], msg.mac, PciHelper::find_free_bdf(mb.bus_pcicfg, argv[0]));
+  Rtl8029 *dev = new Rtl8029(mb.bus_network, mb.bus_irqlines, uint8(argv[1]), msg.mac, PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0])));
   mb.bus_pcicfg.add (dev, Rtl8029::receive_static<MessagePciConfig>);
   mb.bus_ioin.add   (dev, Rtl8029::receive_static<MessageIOIn>);
   mb.bus_ioout.add  (dev, Rtl8029::receive_static<MessageIOOut>);
@@ -344,8 +344,8 @@ PARAM_HANDLER(rtl8029,
 
 
   // set IO region and IRQ
-  dev->PCI_write(Rtl8029::PCI_INTR_offset, argv[1]);
-  dev->PCI_write(Rtl8029::PCI_BAR_offset,  argv[2]);
+  dev->PCI_write(Rtl8029::PCI_INTR_offset, unsigned(argv[1]));
+  dev->PCI_write(Rtl8029::PCI_BAR_offset,  unsigned(argv[2]));
 
   // set default state, this is normally done by the BIOS
   // enable IO accesses

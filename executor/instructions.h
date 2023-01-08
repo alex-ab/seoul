@@ -26,10 +26,10 @@ int helper_SYSENTER()
 {
   if (!_cpu->pm() || !(_cpu->sysenter_cs & 0xfffc)) GP0;
   _cpu->efl &= ~(EFL_VM | EFL_IF | EFL_RF);
-  _cpu->cs.set(_cpu->sysenter_cs + 0, 0, 0xffffffff, 0xc9b);
-  _cpu->ss.set(_cpu->sysenter_cs + 8, 0, 0xffffffff, 0xc93);
-  _cpu->esp = _cpu->sysenter_esp;
-  _cpu->eip = _cpu->sysenter_eip;
+  _cpu->cs.set(uint16(_cpu->sysenter_cs + 0), 0, 0xffffffff, 0xc9b);
+  _cpu->ss.set(uint16(_cpu->sysenter_cs + 8), 0, 0xffffffff, 0xc93);
+  _cpu->rspx = _cpu->sysenter_esp;
+  _cpu->ripx = _cpu->sysenter_eip;
   return _fault;
 }
 
@@ -41,8 +41,8 @@ int helper_SYSENTER()
 int helper_SYSEXIT()
 {
   if (!_cpu->pm() || !(_cpu->sysenter_cs & 0xfffc) || _cpu->cpl()) GP0;
-  _cpu->cs.set((_cpu->sysenter_cs + 16) | 3, 0, 0xffffffff, 0xcfb);
-  _cpu->ss.set((_cpu->sysenter_cs + 24) | 3, 0, 0xffffffff, 0xcf3);
+  _cpu->cs.set(uint16(_cpu->sysenter_cs + 16) | 3, 0, 0xffffffff, 0xcfb);
+  _cpu->ss.set(uint16(_cpu->sysenter_cs + 24) | 3, 0, 0xffffffff, 0xcf3);
   _cpu->esp = _cpu->ecx;
   _cpu->eip = _cpu->edx;
   return _fault;
@@ -93,7 +93,7 @@ template<unsigned operand_size>
 void __attribute__((regparm(3)))  helper_LEA()
 {
   mword *tmp_dst = get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
-  unsigned  virt = modrm2virt();
+  auto virt = modrm2virt();
   move<operand_size>(tmp_dst, &virt);
 }
 

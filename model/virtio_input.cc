@@ -255,7 +255,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = msg.phys - _phys_bar_base;
+			unsigned const offset = unsigned(msg.phys - _phys_bar_base);
 
 			switch (offset) {
 			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
@@ -478,17 +478,21 @@ PARAM_HANDLER(virtio_input,
 	      "Example: 'virtio_input:,11,4096,4096'.",
 	      "If no bdf is given a free one is used.")
 {
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	if (bdf >= 1u << 16)
+		Logging::panic("virtio_input: invalid bdf\n");
+
 	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_memregion,
-	                                     argv[1],
-	                                     PciHelper::find_free_bdf(mb.bus_pcicfg, argv[0]));
+	                                     uint8(argv[1]),
+	                                     uint16(bdf));
 
 	mb.bus_pcicfg.add(dev, Virtio_input::receive_static<MessagePciConfig>);
 	mb.bus_mem   .add(dev, Virtio_input::receive_static<MessageMem>);
 	mb.bus_input .add(dev, Virtio_input::receive_static<MessageInput>);
 	mb.bus_bios  .add(dev, Virtio_input::receive_static<MessageBios>);
 
-	dev->res_x = (argv[2] == ~0UL) ? 4 * 4096 : argv[2];
-	dev->res_y = (argv[3] == ~0UL) ? 4 * 4096 : argv[3];
+	dev->res_x = (argv[2] == ~0UL) ? 4 * 4096 : unsigned(argv[2]);
+	dev->res_y = (argv[3] == ~0UL) ? 4 * 4096 : unsigned(argv[3]);
 
 	Logging::printf("virtio input resolution %ux%u\n", dev->res_x, dev->res_y);
 }

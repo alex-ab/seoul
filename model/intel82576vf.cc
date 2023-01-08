@@ -199,7 +199,7 @@ private:
       uint8   const  l4t     = (tucmd >> 2) & 3;
       bool    const  ipv6    = ((tucmd & 2) == 0);
       //uint8  l4len  = (cur_ctx.raw[1]>>40) & 0xFF;
-      uint16  const  mss     = (cur_ctx.raw[1]>>48) & 0xFFFF;
+      uint16  const  mss     = uint16((cur_ctx.raw[1]>>48) & 0xFFFF);
       uint8   const  maclen  = ((cur_ctx.raw[0] & 0xFFFF) >> 9) & 0xFF;
       uint16  const   iplen  = cur_ctx.raw[0] & 0x1FF;
 
@@ -232,14 +232,14 @@ private:
       uint8  tcp_orig_flg    = packet_tcp_flg;
 
       while (data_left > 0) {
-        uint16 const chunk_size = (data_left > mss) ? mss : data_left;
+        uint16 const chunk_size = uint16((data_left > mss) ? mss : data_left);
         data_left -= chunk_size;
 
-        packet_ip_len = hton16(chunk_size + header_len - maclen);
+        packet_ip_len = hton16(uint16(chunk_size + header_len - maclen));
 
         if (l4t == tx_desc::L4T_TCP)
-          packet_tcp_flg = tcp_orig_flg &
-                           ((data_left == 0) ? /* last */ 0xFF : /* intermediate: set FIN/PSH */ ~9);
+          packet_tcp_flg = uint8(tcp_orig_flg &
+                           ((data_left == 0) ? /* last */ 0xFF : /* intermediate: set FIN/PSH */ ~9));
 
         // Move packet data
         if (data_sent != 0)
@@ -397,7 +397,7 @@ private:
     done:
       // Descriptor is done
       desc.set_done();
-      parent->copy_out(addr, desc.raw, sizeof(desc));
+      parent->copy_out(uintptr_t(addr), desc.raw, sizeof(desc));
       if ((dcmd & (1<<3) /* Report Status */) != 0)
         parent->TX_irq(n);
     }
@@ -423,7 +423,7 @@ private:
 	uint64 addr = (static_cast<uint64>(tdbah)<<32 | tdbal) + ((tdh*16) % tdlen);
 	tx_desc desc;
 
-	if (!parent->copy_in(addr, desc.raw, sizeof(desc)))
+	if (!parent->copy_in(uintptr_t(addr), desc.raw, sizeof(desc)))
 	  return;
 	if ((desc.raw[1] & (1<<29)) == 0) {
 	  Logging::printf("TX legacy descriptor: Not implemented!\n");
@@ -443,16 +443,16 @@ private:
       }
     }
 
-    uint32 read(uint32 offset)
+    uint32 read(uintptr_t offset) const
     {
       // Logging::printf("TX read %x (%x)\n", offset, (offset & 0x8FF) / 4);
       return regs[(offset & 0x8FF)/4];
     }
 
-    void write(uint32 offset, uint32 val, bool const verbose)
+    void write(uintptr_t offset, uint32 val, bool const verbose)
     {
       // Logging::printf("TX write %x (%x) <- %x\n", offset, (offset & 0x8FF) / 4, val);
-      unsigned i = (offset & 0x8FF) / 4;
+      auto const i = (offset & 0x8FF) / 4;
       regs[i] = val;
       if (i == TXDCTL) txdctl_poll(verbose);
       if (i == TDT) tdt_poll();
@@ -508,14 +508,14 @@ private:
       regs[RDH]    = 0;
     }
 
-    uint32 read(uint32 offset)
+    uint32 read(uintptr_t offset) const
     {
       return regs[(offset & 0x8FF)/4];
     }
 
-    void write(uint32 offset, uint32 val)
+    void write(uintptr_t offset, uint32 val)
     {
-      unsigned i = (offset & 0x8FF) / 4;
+      auto const i = (offset & 0x8FF) / 4;
       regs[i] = val;
       if (i == RXDCTL) rxdctl_poll();
     }
@@ -564,7 +564,7 @@ private:
       rx_desc desc;
 
       //Logging::printf("RX descriptor at %llx\n", addr);
-      if (!parent->copy_in(addr, desc.raw, sizeof(desc)))
+      if (!parent->copy_in(uintptr_t(addr), desc.raw, sizeof(desc)))
         return;
 
       // Which descriptor type?
@@ -573,9 +573,13 @@ private:
       case 0:			// Legacy
        	{
        	  desc.legacy.status = 0;
-       	  if(!parent->copy_out(desc.legacy.buffer, buf, size))
+       	  if(!parent->copy_out(uintptr_t(desc.legacy.buffer), buf, size))
        	    desc.legacy.status |= 0x8000; // RX error
-       	  desc.legacy.sumlen = size;
+
+          if (size > (1ull << 32))
+            Logging::printf("%s size too large for sumlen\n", __func__);
+
+          desc.legacy.sumlen = unsigned(size);
           VMM_MEMORY_BARRIER;
        	  desc.legacy.status |= 0x3; // EOP, DD
        	}
@@ -586,8 +590,12 @@ private:
 	  desc.advanced_write.rss_hash = 0;
 	  desc.advanced_write.info = 0;
 	  desc.advanced_write.vlan = 0;
-	  desc.advanced_write.len = size;
-	  if (!parent->copy_out(target_buf, buf, size))
+	  desc.advanced_write.len = uint16(size);
+
+          if (size > (1ull << 16))
+            Logging::printf("%s size too large for advanced_write.len\n", __func__);
+
+	  if (!parent->copy_out(uintptr_t(target_buf), buf, size))
        	    desc.advanced_write.status |= 0x80000000U; // RX error
 	  VMM_MEMORY_BARRIER;
 	  desc.advanced_write.status = 0x3; // EOP, DD
@@ -598,7 +606,7 @@ private:
 	 break;
       }
       
-      if (!parent->copy_out(addr, desc.raw, sizeof(desc)))
+      if (!parent->copy_out(uintptr_t(addr), desc.raw, sizeof(desc)))
 	Logging::printf("RX descriptor writeback failed.\n");
 
       // Advance queue head
@@ -678,7 +686,7 @@ private:
 
   void *guestmem(uint64 addr)
   {
-    MessageMemRegion msg(addr >> 12);
+    MessageMemRegion msg(uintptr_t(addr >> 12));
     if (!_bus_memregion->send(msg) || !msg.ptr)
       Logging::panic("Address translation failed.\n");
     return msg.ptr + addr - (msg.start_page << 12);
@@ -746,7 +754,7 @@ private:
       switch (rVFMBX0 & 0xFFFF) {
       case VF_RESET:
 	rVFMBX0 |= CMD_ACK;
-	rVFMBX1 = _mac.raw;
+	rVFMBX1 = unsigned(_mac.raw);
 	rVFMBX2 = (_mac.raw >> 32) & 0xFFFF;
 	if (_verbose)
 		Logging::printf("VF_RESET " MAC_FMT "\n", MAC_SPLIT(&_mac));
@@ -842,13 +850,13 @@ public:
     return true;
   }
 
-  uint32 MSIX_read(uint32 offset)
+  uint32 MSIX_read(uintptr_t offset)
   {
     if (offset >= sizeof(_msix)) return 0;
     return _msix.raw[offset/4];
   }
 
-  uint32 MSIX_write(uint32 offset, uint32 val)
+  uint32 MSIX_write(uintptr_t offset, uint32 val)
   {
     if (offset >= sizeof(_msix)) return 0;
     // vector_control has only 1 mutable bit.
@@ -863,29 +871,29 @@ public:
 
     if (msg.read) {
       if ((msg.phys & ~0x3FFF) == (rPCIBAR0 & ~0x3FFF)) {
-	uint32 offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
+	auto const offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
 	//Logging::printf("MMIO READ  %lx\n", offset);
 	switch (offset >> 12) {
-	case 2:  *msg.ptr = _rx_queues[(offset & 0x100) ? 1 : 0].read(offset); break;
-	case 3:  *msg.ptr = _tx_queues[(offset & 0x100) ? 1 : 0].read(offset); break;
-	default: *msg.ptr = MMIO_read(offset); break;
+	case 2:  *msg.ptr = _rx_queues[(offset & 0x100) ? 1 : 0].read(uintptr_t(offset)); break;
+	case 3:  *msg.ptr = _tx_queues[(offset & 0x100) ? 1 : 0].read(uintptr_t(offset)); break;
+	default: *msg.ptr = MMIO_read(uintptr_t(offset)); break;
 	}
       } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
-	*msg.ptr = MSIX_read(msg.phys - (rPCIBAR3 & ~0xFFF));
+	*msg.ptr = MSIX_read(uintptr_t(msg.phys - (rPCIBAR3 & ~0xFFF)));
       } else return false;
       return true;
     }
 
     if ((msg.phys & ~0x3FFF) == (rPCIBAR0 & ~0x3FFF)) {
-      uint32 offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
+      auto const offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
       //Logging::printf("MMIO WRITE %lx\n", offset);
       switch (offset >> 12) {
-      case 2: _rx_queues[(offset & 0x100) ? 1 : 0].write(offset, *msg.ptr); break;
-      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(offset, *msg.ptr, _verbose); break;
-      default: MMIO_write(msg.phys - (rPCIBAR0 & ~0x3FFF), *msg.ptr); break;
+      case 2: _rx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr); break;
+      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr, _verbose); break;
+      default: MMIO_write(uintptr_t(msg.phys - (rPCIBAR0 & ~0x3FFF)), *msg.ptr); break;
       }
     } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
-      MSIX_write(msg.phys - (rPCIBAR3 & ~0xFFF), *msg.ptr);
+      MSIX_write(uintptr_t(msg.phys - (rPCIBAR3 & ~0xFFF)), *msg.ptr);
     } else return false;
     return true;
   }
@@ -940,7 +948,7 @@ public:
     }
 
     if (_verbose)
-      Logging::printf("82576VF MAP %lx+%x from %p\n", msg.page, msg.count, msg.ptr);
+      Logging::printf("82576VF MAP %lx+%lx from %p\n", msg.page, msg.count, msg.ptr);
     return true;
   }
 
@@ -1092,7 +1100,7 @@ PARAM_HANDLER(intel82576vf,
   MessageHostOp msg(MessageHostOp::OP_GET_MAC, 0UL);
   if (!mb.bus_hostop.send(msg)) Logging::panic("Could not get a MAC address");
 
-  uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : argv[1];
+  uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : unsigned(argv[1]);
 
   MessageHostOp msg_mmio(MessageHostOp::OP_ALLOC_IOMEM, mem_mmio + MAP_OFFSET, 2*0x1000);
   if (!mb.bus_hostop.send(msg_mmio) || !msg_mmio.ptr)
@@ -1102,8 +1110,8 @@ PARAM_HANDLER(intel82576vf,
 				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
 				       mb.clock(), mb.bus_timer,
 				       mem_mmio, reinterpret_cast<uint32 *>(msg_mmio.ptr),
-				       (argv[2] == ~0UL) ? 0xF7CC0000UL : argv[2],
-				       (argv[3] == ~0UL) ? 0UL : argv[3],
+				       (argv[2] == ~0UL) ? 0xF7CC0000UL : unsigned(argv[2]),
+				       (argv[3] == ~0UL) ? 0UL : unsigned(argv[3]),
 				       argv[4],
 				       PciHelper::find_free_bdf(mb.bus_pcicfg, ~0U),
 				       (argv[0] == ~0UL) ? true  : (argv[0] != 0UL),

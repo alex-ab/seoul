@@ -55,7 +55,7 @@ public:
 	|| cpu->inj_info & 0x80000000) return false;
 
     COUNTER_INC("VB");
-    unsigned irq =  (cpu->cs.base + cpu->eip) - BIOS_BASE;
+    unsigned irq = unsigned((cpu->cs.base + cpu->eip) - BIOS_BASE);
 
     // make sure we take the normal copy-in path
     _vcpu.params_used = 0;
@@ -69,7 +69,7 @@ public:
     if (~msg.mtr_out & MTD_RIP_LEN  && ~msg.mtr_out & MTD_CS_SS) {
       if (cpu->v86()) {
 	// jmp to IRET at the end of the VBIOS code
-	cpu->eip = BIOS_CODE_OFFSET + uintptr_t(&end_vbios) - uintptr_t(&start_vbios) - 1;
+	cpu->eip = BIOS_CODE_OFFSET + unsigned(uintptr_t(&end_vbios) - uintptr_t(&start_vbios)) - 1;
 	msg.mtr_out |= MTD_RIP_LEN;
       }
       else {
@@ -98,7 +98,7 @@ public:
   {
     // we trigger on the read of the params->count
     if (msg.read && in_range(msg.phys, BIOS_SHMEM_BASE, sizeof(_vcpu.shmem.params)) && !((msg.phys - BIOS_SHMEM_BASE) % sizeof(*_vcpu.shmem.params))) {
-      unsigned number = (msg.phys - BIOS_SHMEM_BASE) / sizeof(*_vcpu.shmem.params);
+      auto const number = (msg.phys - BIOS_SHMEM_BASE) / sizeof(*_vcpu.shmem.params);
       if (!number) {
 	// initial read -> clear all other copy-parameters
 	memset(_vcpu.shmem.params + 1, 0, sizeof(_vcpu.shmem.params) - sizeof(*_vcpu.shmem.params));
@@ -119,8 +119,8 @@ public:
 
 	if (_mb.bus_bios.send(msg1, true)) {
 	  // copy GPRs and eflags out
-	  for (unsigned i = 0; i<8; i++) frame->rgpr[7-i] = _shadowcpu.gpr[i];
-	  frame->uefl = _shadowcpu.efl;
+	  for (unsigned i = 0; i < 8; i++) frame->rgpr[7-i] = unsigned(_shadowcpu.gpr[i]);
+	  frame->uefl = uint16(_shadowcpu.efl);
 	  _vcpu.copy_out((_vcpu.shmem.params[0].src.seg << 4) + _vcpu.shmem.params[0].src.ofs, frame, sizeof(StackFrame));
 
 	  // we are done
@@ -169,7 +169,7 @@ public:
       if (i == 3) {
 	discovery_write_dw("realmode idt", i*4,((BIOS_BASE >> 4) << 16) + BIOS_CODE_OFFSET, 4);
 	// write the BIOS code
-	discovery_write_st("bios", BIOS_CODE_OFFSET, &start_vbios, &end_vbios - &start_vbios);
+	discovery_write_st("bios", BIOS_CODE_OFFSET, &start_vbios, unsigned(&end_vbios - &start_vbios));
       }
       value++;
     }

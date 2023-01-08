@@ -65,10 +65,10 @@ struct VMM_ALIGNED(16)  tx_desc {
   bool  rs()      const { return (rawd[2] & (1 << 27 /* RS */)); }
   uint8 idx()     const { return (rawd[3] >> 4) & 0x7; } 
   uint8 dtyp()    const { return (rawd[2] >> 20) & 0xF; }
-  uint8 dcmd()    const { return (rawd[2] >> 24) & 0xFF; }
+  uint8 dcmd()    const { return uint8((rawd[2] >> 24) & 0xFF); }
   uint8 popts()   const { return (rawd[3] >> 8) & 0x3F; }
   bool  legacy()  const { return (rawd[2] & (1<<29 /* DEXT */)) == 0; }
-  uint16 paylen() const { return (rawd[3] >> 14); }
+  uint16 paylen() const { return uint16(rawd[3] >> 14); }
   uint16 dtalen() const { return (rawd[2] & 0xFFFF); }
   bool  eop() const
   {
@@ -82,7 +82,7 @@ struct VMM_ALIGNED(16)  tx_desc {
   uint16 tucmd()  const { return (rawd[2] >> 9) & 0x3FF; }
   uint8  l4t()    const { return (rawd[2] >> (9+2)) & 0x3; }
   uint8  l4len()  const { return (rawd[3] >> 8) & 0xFF; }
-  uint16 mss()    const { return (rawd[3] >> 16) & 0xFFFF; }
+  uint16 mss()    const { return uint16((rawd[3] >> 16) & 0xFFFF); }
   uint16 iplen()  const { return rawd[0] & 0x1FF; }
   uint8  maclen() const { return (rawd[0] >> 9) & 0x7F; }
 

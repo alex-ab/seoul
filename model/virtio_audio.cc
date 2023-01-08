@@ -375,7 +375,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = msg.phys - _phys_bar_base;
+			unsigned const offset = unsigned(msg.phys - _phys_bar_base);
 
 			switch (offset) {
 			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
@@ -877,10 +877,14 @@ PARAM_HANDLER(virtio_sound,
 	      "Example: 'virtio_sound:,15'.",
 	      "If no bdf is given a free one is used.")
 {
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	if (bdf >= 1u << 16)
+		Logging::panic("virtio_sound: bdf invalid\n");
+
 	Virtio_sound *dev = new Virtio_sound(mb.bus_irqlines, mb.bus_memregion,
 	                                     mb.bus_audio,
-	                                     *mb.clock(), argv[1],
-	                                     PciHelper::find_free_bdf(mb.bus_pcicfg, argv[0]));
+	                                     *mb.clock(), uint8(argv[1]),
+	                                     uint16(bdf));
 
 	mb.bus_pcicfg.add(dev, Virtio_sound::receive_static<MessagePciConfig>);
 	mb.bus_mem   .add(dev, Virtio_sound::receive_static<MessageMem>);

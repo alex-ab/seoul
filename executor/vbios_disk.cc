@@ -39,7 +39,7 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
   };
   unsigned _timer { 0 };
   DiskParameter _disk_params[MAX_DISKS];
-  unsigned _disk_count { ~0U };
+  unsigned short _disk_count { 0xffff };
   unsigned short _disk_boot;
 
   bool _diskop_inprogress;
@@ -50,12 +50,13 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
       MessageDisk msg2(_disk_count, &_disk_params[_disk_count]);
       if (!_mb.bus_disk.send(msg2) || msg2.error) break;
     }
-    write_bda(DISK_COUNT,_disk_count,1);
+    write_bda(DISK_COUNT, _disk_count, 1);
   }
 
   bool check_drive(MessageBios &msg, unsigned &disk_nr)
   {
-    if (!~_disk_count) init_params();
+    if (_disk_count == 0xffff) init_params();
+
     disk_nr = msg.cpu->dl & 0x7f;
     if (msg.cpu->dl & 0x80 && disk_nr < _disk_count) return true;
     error(msg, 0x01); // invalid parameter
@@ -108,7 +109,7 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 
     // we push a real-mode iret frame onto the users stack
     unsigned short frame[] = {0x7c00, 0x0000, 0x0202};
-    msg.cpu->esp -= sizeof(frame);
+    msg.cpu->esp -= unsigned(sizeof(frame));
     msg.vcpu->copy_out(msg.cpu->esp, frame, sizeof(frame));
 
     if (!disk_op(msg, _disk_boot, 0, 0x7c00, 1, false) or (msg.cpu->ah != 0))
@@ -171,9 +172,9 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 	if (check_drive(msg, disk_nr))
 	  {
 	    msg.cpu->ah = 0x03;  // we report a harddisk
-	    unsigned sectors = (_disk_params[disk_nr].sectors >> 32) ? 0xffffffff : _disk_params[disk_nr].sectors;
-	    msg.cpu->dx = sectors & 0xffff;
-	    msg.cpu->cx = sectors >> 16;
+	    unsigned sectors = (_disk_params[disk_nr].sectors >> 32) ? 0xffffffffu : unsigned(_disk_params[disk_nr].sectors);
+	    msg.cpu->dx = static_cast<unsigned short>(sectors & 0xffff);
+	    msg.cpu->cx = static_cast<unsigned short>(sectors >> 16);
 	  }
 	break;
       case 0x41:  // int13 extension supported?
@@ -221,7 +222,9 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 	    params.psectors = 63;
 	    unsigned long long sectors =  _disk_params[disk_nr].sectors;
 	    Math::moddiv<unsigned long long>(sectors, params.psectors*params.pheads);
-	    params.pcylinders = sectors;
+	    if (sectors > (1ull << 32))
+	      Logging::panic("disk: too many sectors to convert to pcylinders");
+	    params.pcylinders = unsigned(sectors);
 	    params.size = 0x1a;
 	    params.sectorsize = 512;
         msg.vcpu->copy_out(msg.cpu->ds.base + msg.cpu->si, &params, params.size);
@@ -297,7 +300,7 @@ public:
 	msg.cpu->efl |= 0x200;
 	return jmp_int(msg, 0x76);
       }
-      msg.cpu->ah = read_bda(DISK_COMPLETION_CODE);
+      msg.cpu->ah = read_bda<unsigned char>(DISK_COMPLETION_CODE);
       msg.mtr_out |= MTD_GPR_ACDB;
       return true;
     default:    return false;
@@ -326,7 +329,7 @@ PARAM_HANDLER(vbios_disk,
 	      "vbios_disk:boot_disknr - provide disk related virtual BIOS functions.",
 	      "Example: 'vbios_disk:0'")
 {
-  unsigned short const disk_nr = (argv[0] == ~0UL) ? 0 : argv[0];
+  unsigned short const disk_nr = (argv[0] == ~0UL) ? 0 : static_cast<unsigned short>(argv[0]);
   mb.bus_bios.add(new VirtualBiosDisk(mb, disk_nr), VirtualBiosDisk::receive_static<MessageBios>);
 }
 

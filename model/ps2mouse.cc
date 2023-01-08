@@ -162,7 +162,7 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
     _posx += ((msg.data >> 16) & 0xff) - ((msg.data >> 4) & 0x100);
     _posy += ((msg.data >> 24) & 0xff) - ((msg.data >> 5) & 0x100);
     _posz  = -msg.data2 & 0xff;
-    _status = (_status & 0xf8) | ((msg.data >> 8) & 0x7);
+    _status = uint8((_status & 0xf8) | ((msg.data >> 8) & 0x7));
     update_packet();
 
     return true;
@@ -217,7 +217,7 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 	    switch (msg.value & 0xff)
 	      {
 	      case 0xe6:  // set mouse scaling 1:1
-		_status &= ~STATUS_SCALING;
+		_status &= uint8(~STATUS_SCALING);
 		break;
 	      case 0xe7:  // set mouse scaling 1:2
 		_status |= STATUS_SCALING;
@@ -229,7 +229,7 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 		packet = union64(_samplerate, _resolution << 24 | _status << 16 | 0xfa00 | 4);
 		break;
 	      case 0xea: // set stream mode
-		_status &= ~STATUS_REMOTE;
+		_status &= uint8(~STATUS_REMOTE);
 		break;
 	      case 0xeb: // read packet
 		packet = gen_packet(false);
@@ -255,7 +255,7 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 		_status |= STATUS_ENABLED;
 		break;
 	      case 0xf5: // disable mouse
-		_status &= ~STATUS_ENABLED;
+		_status &= uint8(~STATUS_ENABLED);
 		break;
 	      case 0xf6: // set default
 		set_defaults();
@@ -303,7 +303,7 @@ PARAM_HANDLER(mouse,
 	      "mouse:ps2port,hostmouse:  attach a PS2 mouse at the given PS2 port that gets input from the given hostmouse.",
 	      "Example: 'mouse:1,0x17'")
 {
-  PS2Mouse *dev = new PS2Mouse(mb.bus_ps2, argv[0], argv[1]);
+  PS2Mouse *dev = new PS2Mouse(mb.bus_ps2, unsigned(argv[0]), unsigned(argv[1]));
   mb.bus_ps2.add(dev,   PS2Mouse::receive_static<MessagePS2>);
   mb.bus_input.add(dev, PS2Mouse::receive_static<MessageInput>);
 }

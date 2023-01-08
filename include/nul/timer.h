@@ -173,14 +173,19 @@ public:
   /**
    * Get the head of the queue.
    */
-  unsigned  trigger(timevalue now, DATA ** data = 0) {
-    if (now >= timeout()) {
-      unsigned i = _entries[0]._next - _entries;
-      if (data)
-        *data = _entries[i].data;
-      return i;
+  unsigned trigger(timevalue now, DATA ** data = 0)
+  {
+    if (now < timeout())
+      return 0u;
+
+    auto i = _entries[0]._next - _entries;
+    if (i < 0 || i >= long(ENTRIES)) {
+      Logging::printf("invalid timer %ld\n", i);
+      return 0u;
     }
-    return 0;
+    if (data)
+      *data = _entries[i].data;
+    return unsigned (i);
   }
 
   timevalue timeout() { assert(_entries[0]._next); return _entries[0]._next->_timeout; }

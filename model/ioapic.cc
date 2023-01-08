@@ -120,7 +120,7 @@ private:
     if (_notify[pin]) {
       _notify[pin] = false;
       unsigned gsi = reverse_routing(pin);
-      MessageIrqNotify msg(gsi & ~7, 1  << (gsi & 7));
+      MessageIrqNotify msg(static_cast<unsigned char>(gsi & ~7), 1  << (gsi & 7));
       _mb.bus_irqnotify.send(msg);
     }
   }
@@ -197,7 +197,7 @@ public:
 	msg.phys != MessageApic::IOAPIC_EOI) return false;
     switch (msg.phys & 0xff) {
     case OFFSET_INDEX:
-      if (msg.read)  *msg.ptr = _index; else  _index = *msg.ptr;
+      if (msg.read)  *msg.ptr = _index; else  _index = static_cast<unsigned char>(*msg.ptr);
       return true;
     case OFFSET_DATA:
       if (msg.read) read_data(*msg.ptr); else write_data(*msg.ptr);
@@ -208,7 +208,7 @@ public:
       return true;
     case OFFSET_EOI:
       if (msg.read) break;
-      eoi(*msg.ptr);
+      eoi(static_cast<unsigned char>(*msg.ptr));
       return true;
     }
     return false;
@@ -256,7 +256,7 @@ public:
 
 
 
-  IOApic(Motherboard &mb, uintptr_t base, unsigned gsibase) : _mb(mb), _base(base), _gsibase(gsibase)
+  IOApic(Motherboard &mb, unsigned base, unsigned gsibase) : _mb(mb), _base(base), _gsibase(gsibase)
   {
     reset();
     _mb.bus_mem.add(this,       receive_static<MessageMem>);

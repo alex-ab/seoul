@@ -63,7 +63,11 @@ private:
   };
 
   // the hash function for the cache
-  unsigned slot(unsigned phys) { phys = phys >> 12; return ((phys ^ (phys/SIZE)) % SIZE); }
+  uint64 slot(uint64 phys) const
+  {
+    phys = phys >> 12;
+    return ((phys ^ (phys/SIZE)) % SIZE);
+  }
 
 
 public:
@@ -81,15 +85,15 @@ public:
   struct CacheEntry
   {
     // the start address of this entry
-    uintptr_t _phys1;
-    uintptr_t _phys2;
+    uint64 _phys1;
+    uint64 _phys2;
     // 0 -> invalid, can be RAM up to 8k
     char *_ptr;
     // length of cache entry, this can be up to 8k long
     size_t _len;
     // a pointer in a single linked list to an older entry in the set or ~0u at the end
     unsigned _older;
-    bool is_valid(uintptr_t phys1, uintptr_t phys2, size_t len)
+    bool is_valid(uint64 phys1, uint64 phys2, size_t len)
     {
       if (!_ptr) return false;
       return _ptr && phys1 == _phys1 && len == _len && phys2 == _phys2;
@@ -123,9 +127,11 @@ private:
     assert(!(_buffers[index]._len & 3));
     assert(!(_buffers[index]._phys1 & 3));
 
-    uintptr_t address = _buffers[index]._phys1;
+    uint64 address = _buffers[index]._phys1;
     for (size_t i=0; i < _buffers[index]._len; i += 4) {
-      MessageMem msg2(read, address, reinterpret_cast<unsigned *>(_buffers[index].data + i));
+      if (sizeof(uintptr_t) == 4 && (address >= (1ull << (sizeof(uintptr_t) * 8))))
+        Logging::panic("memcache - unsupported size");
+      MessageMem msg2(read, uintptr_t(address), reinterpret_cast<unsigned *>(_buffers[index].data + i));
       _mem.send(msg2, true);
       if ((address & 0xfff) != 0xffc)
 	address += 4;
@@ -188,14 +194,14 @@ public:
   /**
    * Get an entry from the cache or fetch one from memory.
    */
-  CacheEntry *get(uintptr_t phys1, uintptr_t phys2, size_t len, Type type)
+  CacheEntry *get(uint64 phys1, uint64 phys2, size_t len, Type type)
   {
     assert(!(phys1 & 3));
     assert(!(len & 3));
 
     // XXX simplify it by relying on memory ranges
     {
-      unsigned s = slot(phys1);
+      auto const s = slot(phys1);
       search_entry(_sets[s]._values, _sets[s]._newest);
 
       /**
@@ -212,8 +218,11 @@ public:
 	supported = false;
       }
 
+      if (sizeof(uintptr_t) == 4 && ((phys1 >> 12) >= (1ull << (sizeof(uintptr_t) * 8))))
+        Logging::panic("memcache - unsupported size phys1");
+
       // try to get a direct memory reference
-      MessageMemRegion msg1(phys1 >> 12);
+      MessageMemRegion msg1(uintptr_t(phys1 >> 12));
       if (supported && _memregion.send(msg1, true) && msg1.ptr && ((phys1 + len) <= ((msg1.start_page + msg1.count) << 12))) {
 	CacheEntry *res = _sets[s]._values + entry;
 	res->_ptr = msg1.ptr + (phys1 - (msg1.start_page << 12));

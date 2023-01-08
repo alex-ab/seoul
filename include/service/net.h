@@ -99,7 +99,7 @@ protected:
   // Sums data until buf is 16-byte aligned. This handles odd numbers
   // of align_steps. You should continue in odd mode, if this happens!
   static inline uint32
-  sum_align(uint8 const * &buf, size_t &size, unsigned &align_steps, bool &odd)
+  sum_align(uint8 const * &buf, size_t &size, size_t &align_steps, bool &odd)
   {
     //Logging::printf("align %u %u\n", align_steps, odd);
     if (align_steps == 0) return 0;
@@ -177,7 +177,7 @@ public:
   {
     // Add all carry values.
     uint32 v = (state & 0xFFFF) + (state >> 16);
-    return (v + (v >> 16));
+    return uint16(v + (v >> 16));
   }
 
   // Update a checksum state
@@ -190,7 +190,7 @@ public:
     unsigned cstate      = state;
 
     // Step 1: Align buffer to 16 byte (for SSE)
-    unsigned align_steps = 0xF & (0x10 - (reinterpret_cast<mword>(buf) & 0xF));
+    size_t align_steps = 0xF & (0x10 - (reinterpret_cast<mword>(buf) & 0xF));
     cstate = addoc(cstate, sum_align(buf, size, align_steps, odd));
     //Logging::printf("sum %u align steps\n", align_steps);
 
@@ -249,7 +249,7 @@ public:
       sum(buf + maclen + 12, 8, state, odd);
       
       // Second part of pseudo header: 0, protocol ID, UDP length
-      const uint16 p[] = { static_cast<uint16>(proto << 8), Endian::hton16(len - maclen - iplen) };
+      const uint16 p[] = { static_cast<uint16>(proto << 8), Endian::hton16(uint16(len - maclen - iplen)) };
       sum(reinterpret_cast<const uint8 *>(p), sizeof(p), state, odd);
     } else {
       // IPv6:
@@ -276,7 +276,7 @@ public:
     mword dsti = reinterpret_cast<mword>(dst);
 
     {
-      unsigned align_steps = 0xF & (0x10 - (dsti & 0xF));
+      size_t align_steps = 0xF & (0x10 - (dsti & 0xF));
       //Logging::printf("move %u align steps odd %u\n", align_steps, odd);
 
       state = addoc(state, sum_align(src, size, align_steps, odd));
@@ -352,7 +352,7 @@ public:
     sum(buf + maclen + 12, 8, _state, _odd);
 
     // Second part of pseudo header: 0, protocol ID, UDP length
-    uint16 p[] = { static_cast<uint16>(proto << 8), Endian::hton16(len - maclen - iplen) };
+    uint16 p[] = { static_cast<uint16>(proto << 8), Endian::hton16(uint16(len - maclen - iplen)) };
     sum(reinterpret_cast<uint8 *>(p), sizeof(p), _state, _odd);
 
     //Logging::printf("update_l4_header() -> %08x %u\n", _state, _odd);

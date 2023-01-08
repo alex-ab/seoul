@@ -154,9 +154,11 @@ class InstructionCache : public MemTlb
   };
 
   unsigned _pos;
-  unsigned _tags[SIZE*ASSOZ];
+  unsigned long _tags[SIZE*ASSOZ];
   InstructionCacheEntry _values[SIZE*ASSOZ];
-  unsigned slot(unsigned tag) { return ((tag ^ (tag/SIZE)) % SIZE) * ASSOZ; }
+
+  unsigned long slot(unsigned long const tag) const {
+    return ((tag ^ (tag/SIZE)) % SIZE) * ASSOZ; }
 
 
   // cpu state
@@ -191,7 +193,7 @@ class InstructionCache : public MemTlb
    */
   int fetch_code(InstructionCacheEntry *entry, unsigned len)
   {
-    unsigned virt = READ(eip) + entry->inst_len;
+    uintptr_t virt = READ(eip) + entry->inst_len;
     unsigned limit = READ(cs).limit;
     if ((~limit && limit < (virt + len - 1)) || ((entry->inst_len + len) > InstructionCacheEntry::MAX_INSTLEN)) GP0;
     virt += READ(cs).base;
@@ -206,11 +208,11 @@ class InstructionCache : public MemTlb
    * Find a cache entry for the given state and checks whether it is
    * still valid.
    */
-  bool find_entry(unsigned &index)
+  bool find_entry(unsigned long &index)
   {
     unsigned cs_ar = READ(cs).ar;
-    unsigned linear = _cpu->eip + READ(cs).base;
-    for (unsigned i = slot(linear); i < slot(linear) + ASSOZ; i++)
+    auto const linear = _cpu->eip + READ(cs).base;
+    for (auto i = slot(linear); i < slot(linear) + ASSOZ; i++)
       if (linear == _tags[i] &&  _values[i].inst_len)
 	{
 	  InstructionCacheEntry tmp;
@@ -248,7 +250,7 @@ class InstructionCache : public MemTlb
       {
 	fetch_code(_entry, 1);
 	if ((modrm & 0xc7) == 0x4 && (_entry->data[_entry->inst_len - 1] & 0x7) == 5) info |= MRM_DIS32 | MRM_NOBASE;
-	info = (info & ~0xff) | _entry->data[_entry->inst_len - 1];
+	info = static_cast<unsigned short>((info & ~0xff) | _entry->data[_entry->inst_len - 1]);
 	if (((info >> 3) & 0xf) == 4) info |= MRM_NOINDEX;
 	if (~info & MRM_NOBASE && ((info & 0xf) == 4 || (info & 0xf) == 5)) info |= MRM_SS;
       }
@@ -275,7 +277,7 @@ public:
   int get_instruction()
   {
     //COUNTER_INC("INSTR");
-    unsigned index = 0;
+    unsigned long index = 0;
     if (!find_entry(index) && !_fault)
       {
 	_entry = _values + index;
@@ -331,10 +333,10 @@ public:
 
 
 
-  unsigned modrm2virt()
+  unsigned long modrm2virt()
   {
-    unsigned short info = _entry->modrminfo;
-    unsigned virt = 0;
+    unsigned short info = static_cast<unsigned short>(_entry->modrminfo);
+    unsigned long virt = 0;
     unsigned char *disp_offset = _entry->data + _entry->offset_opcode + 1;
     if (info & MRM_SIB)
       {
@@ -358,16 +360,16 @@ public:
       default:
 	break;
       }
-    if (_entry->flags & IC_BITS)
-      {
-	unsigned bitofs = *get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
-	virt += (bitofs >> 3) & ~((1 << _entry->operand_size) - 1);
-      }
+
+    if (_entry->flags & IC_BITS) {
+      auto const bitofs = *get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
+      virt += (bitofs >> 3) & ~((1 << _entry->operand_size) - 1);
+    }
     return virt;
   }
 
 
-  int virt_to_ptr(void *&res, unsigned length, Type type, unsigned virt)
+  int virt_to_ptr(void *&res, unsigned length, Type type, unsigned long virt)
   {
     InstructionCache::handle_segment((&_cpu->es) + ((_entry->prefixes >> 8) & 0x0f), virt, length, type & TYPE_W, false)
       || prepare_virtual(virt, length, type, res);
@@ -380,7 +382,7 @@ public:
    */
   int modrm2mem(void *&res, unsigned length, Type type)
   {
-    unsigned short info = _entry->modrminfo;
+    auto const info = _entry->modrminfo;
     if (info & MRM_REG)
 	res = length == 1 ? get_reg<1>(info & 0x7) : get_reg<0>(info & 0x7);
     else
@@ -410,7 +412,7 @@ public:
 	asm volatile ("call *%4; pushf; pop %3"
 		      : PARAM1(dummy1), PARAM2(dummy2), PARAM3(dummy3), "=g"(tmp_flag)
 		      : "m"(_entry->execute), "0"(this), "1"(tmp_src), "2"(tmp_dst) : CLOBBER);
-	_cpu->efl = (_cpu->efl & ~0x8d5) | (tmp_flag  & 0x8d5);
+	_cpu->rflx = (_cpu->rflx & ~0x8d5) | (tmp_flag  & 0x8d5);
 	_mtr_out |= MTD_RFLAGS;
 	break;
       case IC_LOADFLAGS:
@@ -424,7 +426,7 @@ public:
 	asm volatile ("push %3; popf; call *%4; pushf; pop %3"
 		      : PARAM1(dummy1), PARAM2(dummy2), PARAM3(dummy3), "+g"(tmp_flag)
 		      : "m"(_entry->execute), "0"(this), "1"(tmp_src), "2"(tmp_dst) : CLOBBER);
-	_cpu->efl = (_cpu->efl & ~0x8d5) | (tmp_flag  & 0x8d5);
+	_cpu->rflx = (_cpu->rflx & ~0x8d5) | (tmp_flag  & 0x8d5);
 	_mtr_out |= MTD_RFLAGS;
 	break;
       default:

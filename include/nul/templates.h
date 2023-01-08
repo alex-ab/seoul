@@ -48,7 +48,7 @@ protected:
   /*
    * Write a string to a resource.
    */
-  bool discovery_write_st(const char *resource, unsigned offset, const void *value, unsigned count) {
+  bool discovery_write_st(const char *resource, size_t offset, const void *value, unsigned count) {
     MessageDiscovery msg(resource, offset, value, count);
     return static_cast<Y*>(this)->_mb.bus_discovery.send(msg);
   }
@@ -57,7 +57,7 @@ protected:
   /**
    * Write a dword or less than it.
    */
-  bool discovery_write_dw(const char *resource, unsigned offset, unsigned value, unsigned count = 4)  {
+  bool discovery_write_dw(const char *resource, size_t offset, size_t value, unsigned count = 4)  {
     return discovery_write_st(resource, offset, &value, count);
   }
 
@@ -65,7 +65,7 @@ protected:
   /**
    * Read a dword.
    */
-  bool discovery_read_dw(const char *resource, unsigned offset, unsigned &value)  {
+  bool discovery_read_dw(const char *resource, size_t offset, unsigned &value)  {
     MessageDiscovery msg(resource, offset, &value);
     return static_cast<Y*>(this)->_mb.bus_discovery.send(msg);
   }

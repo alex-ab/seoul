@@ -71,9 +71,9 @@ private:
   }
 
   void set_sector(unsigned long long sector) {
-    _lbalow  = ((sector  >> 0) & 0xff) | ((sector >>  (24-8)) & 0xff00);
-    _lbamid  = ((sector  >> 8) & 0xff) | ((sector >>  (32-8)) & 0xff00);
-    _lbahigh = ((sector  >>16) & 0xff) | ((sector >>  (40-8)) & 0xff00);
+    _lbalow  = static_cast<unsigned short>(((sector  >> 0) & 0xff) | ((sector >>  (24-8)) & 0xff00));
+    _lbamid  = static_cast<unsigned short>(((sector  >> 8) & 0xff) | ((sector >>  (32-8)) & 0xff00));
+    _lbahigh = static_cast<unsigned short>(((sector  >>16) & 0xff) | ((sector >>  (40-8)) & 0xff00));
   }
 
 
@@ -100,12 +100,12 @@ private:
     identify[1] = 16383; // maximum cyclinders
     identify[6] = 63; // sectors per track
     // heads
-    identify[3] = (_params.sectors > 255u*identify[1]*identify[6]) ? 255 : (static_cast<unsigned>( _params.sectors) / identify[1]*identify[6]);
+    identify[3] = static_cast<unsigned short>((_params.sectors > 255u*identify[1]*identify[6]) ? 255 : (static_cast<unsigned>( _params.sectors) / identify[1]*identify[6]));
 
     identify[10] = 'S';// SN
     identify[23] = 'F';// FW
     for (unsigned i=0; i<20; i++)
-      identify[27+i] = _params.name[2*i] << 8 | _params.name[2*i+1];
+      identify[27+i] = static_cast<unsigned short>(_params.name[2*i] << 8 | _params.name[2*i+1]);
     identify[48] = 0x0001; // dword IO
     identify[49] = 0x0200; // lba supported
     identify[53] = 0x0006; // bytes 64-70, 88 are valid
@@ -114,7 +114,7 @@ private:
     identify[56] = identify[6]; // current sectors per track
     identify[57] = 512; // current sectors capacity
 
-    unsigned maxlba28 = (_params.sectors >> 28) ? 0x0fffffff :  _params.sectors;
+    unsigned maxlba28 = unsigned((_params.sectors >> 28) ? 0x0fffffff :  _params.sectors);
     Cpu::move<2>(identify + 60, &maxlba28);
     identify[65] = identify[66] = identify[67] = identify[68] = 120; // PIO timing
     identify[80] = 0x7e;   // major version number: up to ata-6
@@ -129,22 +129,22 @@ private:
 
     unsigned char checksum = 0;
     for (unsigned i=0; i<512; i++) checksum += reinterpret_cast<unsigned char *>(identify)[i];
-    identify[0xff] -= checksum << 8;
+    identify[0xff] -= static_cast<unsigned short>(checksum << 8);
   }
 
   void do_read(bool initial, unsigned long long sector) {
     if (!initial and !_count)  {
-      _status &= ~0x88; // no data anymore
+      _status &= static_cast<unsigned char>(~0x88); // no data anymore
       return;
     }
 
-    _status = (_status & ~0x81) | 0x80;
+    _status = (_status & static_cast<unsigned char>(~0x81)) | 0x80;
     _bufferoffset = 0;
     memset(_buffer, 0xff, 512);
     DmaDescriptor dma = { _baddr, 512};
     MessageDisk msg(MessageDisk::DISK_READ, _disknr, 0, sector, 1, &dma, 0, ~0ul);
     if (!_bus_disk.send(msg)) {
-      _status = (_status  & ~0x80) | 0x1;
+      _status = (_status & static_cast<unsigned char>(~0x80)) | 0x1;
       _error  |= 1<<5; // device fault
       return;
     }
@@ -169,18 +169,18 @@ private:
       break;
     case 0xec: // IDENTIFY
       if (!initial) {
-	_status &= ~0x89; // no data anymore
+	_status &= static_cast<unsigned char>(~0x89); // no data anymore
 	break;
       }
       build_identify_buffer(reinterpret_cast<unsigned short *>(_buffer));
       _bufferoffset = 0;
-      _status = (_status & ~0x89) | 0x8;
+      _status = (_status & static_cast<unsigned char>(~0x89)) | 0x8;
       _error  = 0;
       update_irq(true);
       break;
     case 0xa1: // packet identify
     case 0xc6: // multiple count
-      _status = (_status & ~0x89) | 1;
+      _status = (_status & static_cast<unsigned char>(~0x89)) | 1;
       _error |= 4; // abort
       update_irq(true);
       break;
@@ -190,7 +190,7 @@ private:
       break;
     case 0xef: // SET FEATURES
       LOG("SET FEATURES %x sc %x\n", _features, _count);
-      _status = _status  & ~0x89;
+      _status = _status & static_cast<unsigned char>(~0x89);
       update_irq(true);
       break;
    case 0x27: // READ_NATIVE_MAX_ADDRESS48
@@ -212,7 +212,7 @@ private:
     switch (_command) {
     case 0x20: // READ_SECTOR
     case 0x24: // READ_SECTOR_EXT
-      _status = (_status & ~0x80) | 0x8; // we have data
+      _status = static_cast<unsigned char>((_status & ~0x80) | 0x8); // we have data
 
       // increment sector and decrement count
       set_sector(get_sector(_command == 0x24)+1);
@@ -276,14 +276,14 @@ private:
 	_bufferoffset += 1 << msg.type;
 	return true;
       case 1 ... 6:
-	_regs[port - 1] = (_regs[port - 1] << 8) | (msg.value & 0xff);
+	_regs[port - 1] = static_cast<unsigned short>((_regs[port - 1] << 8) | (msg.value & 0xff));
 	if (port == 6) {
 	  //_drive |= 0xa0;
-	  if (_drive & 0x10) _status &= ~0x40;  else _status |= 0x40;
+	  if (_drive & 0x10) _status &= static_cast<unsigned char>(~0x40);  else _status |= 0x40;
 	}
 	return true;
       case 7:
-	_command = msg.value;
+	_command = static_cast<unsigned char>(msg.value);
 	LOG("issue command %x\n", _command);
 	issue_command(true);
 	return true;
@@ -292,7 +292,7 @@ private:
     if (!((msg.port ^ PCI_BAR1) & PCI_BAR1_mask) and msg.type == MessageIOOut::TYPE_OUTB and ((msg.port & ~PCI_BAR1_mask) == 2)) {
       // toggle reset?
       if (_control & 4 && ~msg.value & 4) reset_device();
-      _control = msg.value;
+      _control = static_cast<unsigned char>(msg.value);
       LOG("control %x\n", _control);
       return true;
     }
@@ -328,7 +328,7 @@ PARAM_HANDLER(ide,
 	      "If no bdf is given, the first free one is searched.")
 {
   DiskParameter params;
-  MessageDisk msg(argv[4], &params);
+  MessageDisk msg(unsigned(argv[4]), &params);
   check0(!mb.bus_disk.send(msg), "could not find disk #%x", msg.disknr);
 
   MessageHostOp msg1(MessageHostOp::OP_RESERVE_IO_RANGE, (unsigned long)IdeController::BUFFER_SIZE);
@@ -337,17 +337,17 @@ PARAM_HANDLER(ide,
   MessageHostOp msg2(MessageHostOp::OP_ALLOC_IOMEM, msg1.phys, (unsigned long)IdeController::BUFFER_SIZE);
   if (!mb.bus_hostop.send(msg2))
     Logging::panic("%s failed to alloc %d from guest memory\n", __PRETTY_FUNCTION__, IdeController::BUFFER_SIZE);
-  unsigned bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, argv[3]);
-  IdeController *dev = new IdeController(mb.bus_disk, mb.bus_irqlines, argv[2], bdf, msg.disknr, params, msg2.ptr, msg1.phys);
+  unsigned bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[3]));
+  IdeController *dev = new IdeController(mb.bus_disk, mb.bus_irqlines, static_cast<unsigned char>(argv[2]), bdf, msg.disknr, params, msg2.ptr, msg1.phys);
   mb.bus_pcicfg.add(dev, IdeController::receive_static<MessagePciConfig>);
   mb.bus_ioin.  add(dev, IdeController::receive_static<MessageIOIn>);
   mb.bus_ioout. add(dev, IdeController::receive_static<MessageIOOut>);
   mb.bus_diskcommit.add(dev, IdeController::receive_static<MessageDiskCommit>);
   // set default state; this is normally done by the BIOS
   // set MMIO region and IRQ
-   dev->PCI_write(IdeController::PCI_BAR0_offset, argv[0]);
-   dev->PCI_write(IdeController::PCI_BAR1_offset, argv[1]);
-   dev->PCI_write(IdeController::PCI_INTR_offset, argv[2]);
+   dev->PCI_write(IdeController::PCI_BAR0_offset, unsigned(argv[0]));
+   dev->PCI_write(IdeController::PCI_BAR1_offset, unsigned(argv[1]));
+   dev->PCI_write(IdeController::PCI_INTR_offset, unsigned(argv[2]));
   // enable IRQ and IOPort access
    dev->PCI_write(IdeController::PCI_CMD_STS_offset, 0x401);
 }

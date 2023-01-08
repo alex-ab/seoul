@@ -161,7 +161,7 @@ class Virtio::Device
 
 		uintptr_t vmm_address(uint64 const req_addr, size_t const req_size)
 		{
-			MessageMemRegion mem_region(req_addr >> 12);
+			MessageMemRegion mem_region(uintptr_t(req_addr >> 12));
 			if (!_bus_memregion.send(mem_region, false) || !mem_region.ptr) {
 				Logging::printf("Invalid guest physical address %llx+%lx\n",
 				                req_addr, req_size);
@@ -179,7 +179,7 @@ class Virtio::Device
 				return 0;
 			}
 
-			return uintptr_t(mem_region.ptr) + (req_addr - guest_base);
+			return uintptr_t(mem_region.ptr) + uintptr_t(req_addr - guest_base);
 		}
 
 		virtual void   notify  (unsigned) = 0;
@@ -266,8 +266,11 @@ class Virtio::Device
 					if (_bar0_size) {
 						msg.value = PHYS_BAR_SIZE;
 						_bar0_size = false;
-					} else
-						msg.value = _phys_bar_base;
+					} else {
+						if (_phys_bar_base >= (1ull << 32))
+							Logging::panic("phys bar addr too large\n");
+						msg.value = unsigned(_phys_bar_base);
+					}
 					break;
 				case 0x34: /* capability pointer */
 					msg.value = 0x40;
@@ -341,7 +344,7 @@ class Virtio::Device
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = msg.phys - _phys_bar_base;
+			auto const offset = msg.phys - _phys_bar_base;
 
 			/* debug start */
 			bool show = _verbose;
@@ -354,7 +357,7 @@ class Virtio::Device
 			/* debug end */
 
 			if (!msg.read && show)
-				Logging::printf("Messagemem %lx status %x %s msg.value=%x\n",
+				Logging::printf("Messagemem %llx status %x %s msg.value=%x\n",
 				                msg.phys, _control & 2,
 				                msg.read ? "read" : "write", *msg.ptr);
 
@@ -405,7 +408,7 @@ class Virtio::Device
 				else {
 					if ((*msg.ptr >> 16) < _queues_count) {
 						_device_status = *msg.ptr & 0xff;
-						_queue_select  = *msg.ptr >> 16;
+						_queue_select  = uint16(*msg.ptr >> 16);
 					} else
 						Logging::printf("virtio, queue select out of range\n");
 				}
@@ -447,7 +450,7 @@ class Virtio::Device
 				}
 
 				/* index = [0 - QUEUES_MAX] - 0 is invalid, used as index - 1 */
-				unsigned queue_index = (offset - BAR_OFFSET_NOTIFY) / NOTIFY_OFF_MULTIPLIER;
+				unsigned queue_index = unsigned((offset - BAR_OFFSET_NOTIFY) / NOTIFY_OFF_MULTIPLIER);
 
 				if ((queue_index == 0) || queue_index > _queues_count) {
 					for (unsigned i = 0; i < _queues_count; i++) {
@@ -478,7 +481,7 @@ class Virtio::Device
 			}
 
 			if (msg.read && show)
-				Logging::printf("Messagemem %lx status %x %s msg.value=%x\n",
+				Logging::printf("Messagemem %llx status %x %s msg.value=%x\n",
 				                msg.phys, _control & 2,
 				                msg.read ? "read " : "write", *msg.ptr);
 			return true;

@@ -154,7 +154,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 	msg.mtr_out |= MTD_TSC;
 	break;
       case 0x174 ... 0x176:
-	(&cpu->sysenter_cs)[cpu->ecx - 0x174] = cpu->edx_eax();
+	(&cpu->sysenter_cs)[cpu->ecx - 0x174] = uintptr_t(cpu->edx_eax());
 	msg.mtr_out |= MTD_SYSENTER;
 	break;
       case 0x1d9: /* debug ctl - unsupported */
@@ -335,8 +335,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     Cpu::move(msg.dst, &msg2.value, msg.io_order);
     msg.mtr_out |= MTD_GPR_ACDB;
 
-    if (!res && ~debugioin[msg.port >> 3] & (1 << (msg.port & 7))) {
-      debugioin[msg.port >> 3] |= 1 << (msg.port & 7);
+    if (!res && ~debugioin[msg.port >> 3] & (1u << (msg.port & 7))) {
+      debugioin[msg.port >> 3] |= uint8(1u << (msg.port & 7));
       //dprintf("could not read from ioport %x eip %x cs %x-%x\n", msg.port, msg.cpu->eip, msg.cpu->cs.base, msg.cpu->cs.ar);
     } else msg.consumed = 1;
   }
@@ -348,7 +348,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     bool res = _mb.bus_ioout.send(msg2);
     if (!res && ~debugioout[msg.port >> 3] & (1 << (msg.port & 7))) {
-      debugioout[msg.port >> 3] |= 1 << (msg.port & 7);
+      debugioout[msg.port >> 3] |= uint8(1u << (msg.port & 7));
       //dprintf("could not write %x to ioport %x eip %x\n", msg.cpu->eax, msg.port, msg.cpu->eip);
     } else msg.consumed = 1;
   }

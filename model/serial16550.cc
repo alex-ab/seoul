@@ -138,7 +138,7 @@ public:
 	  }
 	else
 	  msg.value = _regs[RBR];
-	if (~_regs[FCR] & 1 || !_rfcount) _regs[LSR] &= ~1;
+	if (~_regs[FCR] & 1 || !_rfcount) _regs[LSR] &= 0xfe;
 	break;
       case IIR:
 	msg.value = get_iir();
@@ -174,7 +174,7 @@ public:
       {
       case THR:
 	{
-	  MessageSerial msg2(_hostserial, msg.value & _sendmask);
+	  MessageSerial msg2(_hostserial, uint8(msg.value & _sendmask));
 	  if (_regs[MCR] & 0x10)
 	    // loopback
 	    receive(msg2);
@@ -202,18 +202,18 @@ public:
 	    unsigned char level[] = {1, 4, 8, 14};
 	    _triggerlevel = level[(msg.value >> 6) & 3];
 	  }
-	_regs[FCR] = msg.value;
+	_regs[FCR] = uint8(msg.value);
 	break;
       case LCR:
-	_regs[LCR] = msg.value;
-	_sendmask = (1 << (5 + (msg.value & 3))) -1;
+	_regs[LCR] = uint8(msg.value);
+	_sendmask  = uint8((1u << (5 + (msg.value & 3))) - 1);
 	break;
       case MCR:
 	_regs[MCR] = msg.value & 0x1f;
 	if (msg.value & 0x10)
 	  {
-	    unsigned char input = ((msg.value & 0x1) << 1) | ((msg.value & 0x2) >> 1) | (msg.value & 0xc);
-	    _regs[MSR] =  (input << 4) | (((_regs[MSR] >> 4) ^ input) & ~(input & 4));
+	    auto const input = uint8(((msg.value & 0x1) << 1) | ((msg.value & 0x2) >> 1) | (msg.value & 0xc));
+	    _regs[MSR] =  uint8((input << 4) | (((_regs[MSR] >> 4) ^ input) & ~(input & 4)));
 	  }
 	else
 	  _regs[MSR] = 0xb0;
@@ -227,7 +227,7 @@ public:
 	[[fallthrough]];
 
       case SCR ... DLM:
-	_regs[offset] = msg.value;
+	_regs[offset] = uint8(msg.value);
 	break;
       default:
 	Logging::panic("SerialDevice::%s() %x %x", __func__, msg.port, msg.value);
@@ -270,5 +270,5 @@ PARAM_HANDLER(serial,
 	      "Example: 'serial:0x3f8,8,0x47'.",
 	      "The input comes from hdev and the output is redirected to hdev+1.")
 {
-  new SerialDevice(mb, argv[0], argv[1], argv[2]);
+  new SerialDevice(mb, uint16(argv[0]), uint8(argv[1]), unsigned(argv[2]));
 }

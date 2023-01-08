@@ -76,5 +76,5 @@ PARAM_HANDLER(hostsink,
 	      "hostsink:hostdevnr,bufferlen,sinkchar,contchar - provide an output for a serial port.",
 	      "Example: 'hostsink:0x4712,80'.")
 {
-  mb.bus_serial.add(new HostSink(argv[0], argv[1], argv[2], argv[3]), HostSink::receive_static<MessageSerial>);
+  mb.bus_serial.add(new HostSink(unsigned(argv[0]), unsigned(argv[1]), unsigned(argv[2]), unsigned(argv[3])), HostSink::receive_static<MessageSerial>);
 }

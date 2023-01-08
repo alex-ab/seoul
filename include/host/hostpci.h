@@ -110,19 +110,19 @@ class HostPci
    */
   unsigned search_bridge(unsigned dst) {
 
-    unsigned char dstbus = dst >> 8;
+    auto const dstbus = dst >> 8;
 
     for (unsigned dev = 0; dev < 32; dev++) {
 
       unsigned char maxfunc = 1;
       for (unsigned func = 0; func < maxfunc; func++) {
 
-	unsigned bdf =  (dev << 3) | func;
+	unsigned bdf   = (dev << 3) | func;
 	unsigned value = conf_read(bdf, 2);
 	if (value == ~0U) continue;
 
-	unsigned char header = conf_read(bdf, 3) >> 16;
-	if (maxfunc == 1 && header & 0x80)  maxfunc = 8;
+	auto const header = conf_read(bdf, 3) >> 16;
+	if (maxfunc == 1 && header & 0x80) maxfunc = 8;
 	if ((header & 0x7f) != 1) continue;
 
 	// we have a bridge
@@ -144,7 +144,7 @@ class HostPci
     unsigned msi_offset = find_cap(bdf, CAP_MSI);
     if (!(msix_offset || msi_offset)) Logging::panic("No MSI support in %x for %x", bdf, nr);
 
-    MessageHostOp msg1 = msg1.attach_msi(~0U, true, bdf, "gsi msi");
+    MessageHostOp msg1 = msg1.attach_msi(~0U, true, uint16(bdf), "gsi msi");
     if (!bus_hostop.send(msg1)) Logging::panic("could not attach to msi for bdf %x\n", bdf);
     if (!msg1.msi_address)  Logging::printf("Attach to MSI %x failed for bdf %x with (%llx,%x) - IRQs may be broken!\n", nr, bdf, msg1.msi_address, msg1.msi_value);
 
@@ -163,16 +163,16 @@ class HostPci
       }
 
       volatile unsigned *_msix_table = reinterpret_cast<volatile unsigned *>(msix_table);
-      _msix_table[nr*4 + 0]  = msg1.msi_address;
-      _msix_table[nr*4 + 1]  = msg1.msi_address >> 32;
+      _msix_table[nr*4 + 0]  = unsigned(msg1.msi_address);
+      _msix_table[nr*4 + 1]  = unsigned(msg1.msi_address >> 32);
       _msix_table[nr*4 + 2]  = msg1.msi_value;
       _msix_table[nr*4 + 3] &= ~1;
       conf_write(bdf, msix_offset, 1U << 31);
     } else if (msi_offset) {
       unsigned ctrl = conf_read(bdf, msi_offset);
       unsigned base = msi_offset + 1;
-      conf_write(bdf, base+0, msg1.msi_address);
-      conf_write(bdf, base+1, msg1.msi_address >> 32);
+      conf_write(bdf, base+0, unsigned(msg1.msi_address));
+      conf_write(bdf, base+1, unsigned(msg1.msi_address >> 32));
       if (ctrl & 0x800000) base += 1;
       conf_write(bdf, base+1, msg1.msi_value);
 
@@ -200,7 +200,7 @@ class HostPci
       Logging::printf("XXX Trying to program vector %d, but we only have legacy interrupts!\n", nr);
 
     // normal GSIs -  ask atare
-    unsigned char pin = conf_read(bdf, 0xf) >> 8;
+    auto const pin = uint8(conf_read(bdf, 0xf) >> 8);
     if (!pin) { Logging::printf("No IRQ PINs connected on %x\n", bdf ); return ~0u; }
     MessageAcpi msg3(search_bridge(bdf), bdf, pin - 1);
     if (!bus_acpi.send(msg3, true)) {
@@ -221,9 +221,9 @@ class HostPci
   unsigned find_cap(unsigned bdf, unsigned char id)
   {
     if ((conf_read(bdf, 1) >> 16) & 0x10 /* Capabilities supported? */)
-      for (unsigned char offset = conf_read(bdf, 0xd);
+      for (auto offset = uint8(conf_read(bdf, 0xd));
 	   (offset != 0) && !(offset & 0x3);
-	   offset = conf_read(bdf, offset >> 2) >> 8)
+	   offset = uint8(conf_read(bdf, offset >> 2) >> 8))
 	if ((conf_read(bdf, offset >> 2) & 0xFF) == id)
 	  return offset >> 2;
     return 0;

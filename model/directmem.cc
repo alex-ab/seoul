@@ -42,7 +42,7 @@ class DirectMemDevice : public StaticReceiver<DirectMemDevice>
     if (!in_range(msg.page, _phys >> 12, _size >> 12))  return false;
     Logging::printf("%s: %p base %lx+%zx\n", __PRETTY_FUNCTION__, _ptr, _phys, _size);
     msg.start_page = _phys >> 12;
-    msg.count = _size >> 12;
+    msg.count = unsigned(_size >> 12);
     msg.ptr   = _ptr;
     return true;
   }

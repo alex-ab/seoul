@@ -67,7 +67,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	    return;
 	  }
 	if (_mode & MODE_GOT_BREAK) value |= 0x80;
-	_mode &= ~MODE_GOT_BREAK;
+	_mode &= uint8(~MODE_GOT_BREAK);
 	value = GenericKeyboard::translate_sc2_to_sc1(value);
       }
     switch ((_pwrite - _pread) % BUFFERSIZE)
@@ -116,7 +116,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
   /**
    * Returns whether a keycode respects a shift modifier.
    */
-  bool has_shift_modifiers(unsigned char key)
+  bool has_shift_modifiers(unsigned const key) const
   {
     switch (key)
       {
@@ -143,7 +143,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
   {
     if (value & KBFLAG_EXTEND0 && has_shift_modifiers(value))
       {
-	unsigned char key = value;
+	unsigned const key = value;
 	unsigned modifiers = 0;
 	if (value & KBFLAG_LSHIFT && (key == 0x4a || ~value & KBFLAG_NUM))
 	  modifiers = 0x12;
@@ -159,7 +159,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	  {
 	    enqueue(0xe0);
 	    if (~value & KBFLAG_RELEASE) enqueue(0xf0);
-	    enqueue(modifiers);
+	    enqueue(uint8(modifiers));
 	    modifiers >>= 8;
 	  }
       }
@@ -177,8 +177,8 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
     unsigned oldwrite = _pwrite;
     if (_scset == 2 || _scset == 1)
       {
-	unsigned char key = msg.data;
-	_mode &= ~MODE_GOT_BREAK;
+	unsigned char key = uint8(msg.data);
+	_mode &= uint8(~MODE_GOT_BREAK);
 	if (msg.data & KBFLAG_EXTEND1)
 	  {
 	    enqueue(0xe1);
@@ -191,7 +191,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	if (~msg.data & KBFLAG_RELEASE)  handle_shift_modifiers(msg.data);
 	if (msg.data & KBFLAG_EXTEND0)   enqueue(0xe0);
 	if (msg.data & KBFLAG_RELEASE)   enqueue(0xf0);
-	enqueue(msg.data);
+	enqueue(uint8(msg.data));
 	if (msg.data & KBFLAG_RELEASE)   handle_shift_modifiers(msg.data);
 
 #if 0
@@ -235,7 +235,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	if (_mode & MODE_RESEND)
 	  {
 	    msg.value = _last_reply;
-	    _mode &= ~MODE_RESEND;
+	    _mode &= uint8(~MODE_RESEND);
 	  }
 	else if (_response)
 	  {
@@ -246,7 +246,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 		assert(!_response && msg.value == 0xfa);
 		reset();
 		_response = 0xaa;
-		_mode &= ~MODE_RESET;
+		_mode &= uint8(~MODE_RESET);
 	      }
 	  }
 	else
@@ -263,7 +263,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
       {
 	unsigned new_response = 0xfa;
 	unsigned char command = msg.value;
-	unsigned char new_mode = _mode & ~(MODE_STOPPED | MODE_RESET);
+	uint8         new_mode = uint8(_mode & ~(MODE_STOPPED | MODE_RESET));
 	switch (msg.value)
 	  {
 	  case 0xf0: // set scanset
@@ -286,7 +286,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	    break;
 	  case 0xf4: // enable
 	    _pwrite = _pread = 0;
-	    new_mode &= ~MODE_DISABLED;
+	    new_mode &= uint8(~MODE_DISABLED);
 	    break;
 	  case 0xf5: // default+disable
 	    reset();
@@ -294,7 +294,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	    break;
 	  case 0xf6: // default+enabled
 	    reset();
-	    new_mode &= ~MODE_DISABLED;
+	    new_mode &= uint8(~MODE_DISABLED);
 	    break;
 	  case 0xf8: // all keys make-break
 	  case 0xfa: // all keys make-break+typematic
@@ -340,9 +340,9 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	      case 0xfc: // set key type make+break
 	      case 0xfd: // set key type make
 		if (_last_command == 0xfc)
-		  _no_breakcode[msg.value >> 3] &= ~(1 << (msg.value & 7));
+		  _no_breakcode[msg.value >> 3] &= uint8(~(1u << (msg.value & 7)));
 		else
-		  _no_breakcode[msg.value >> 3] |= 1 << (msg.value & 7);
+		  _no_breakcode[msg.value >> 3] |= uint8(1u << (msg.value & 7));
 
 		[[fallthrough]];
 
@@ -387,7 +387,7 @@ PARAM_HANDLER(keyb,
 	      "keyb:ps2port,hostkeyboard - attach a PS2 keyboard at the given PS2 port that gets input from the given hostkeyboard.",
 	      "Example: 'keyb:0,0x17'")
 {
-  PS2Keyboard *dev = new PS2Keyboard(mb.bus_ps2, argv[0], argv[1]);
+  PS2Keyboard *dev = new PS2Keyboard(mb.bus_ps2, unsigned(argv[0]), unsigned(argv[1]));
   mb.bus_ps2.add(dev,   PS2Keyboard::receive_static<MessagePS2>);
   mb.bus_input.add(dev, PS2Keyboard::receive_static<MessageInput>);
   mb.bus_legacy.add(dev,PS2Keyboard::receive_static<MessageLegacy>);

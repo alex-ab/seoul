@@ -88,7 +88,7 @@ class VirtualBiosKeyboard : public StaticReceiver<VirtualBiosKeyboard>, public B
 
 
   void update_status(unsigned key) {
-    unsigned status = read_bda(0x17) & ~0x2f;
+    unsigned status = read_bda<unsigned>(0x17) & ~0x2f;
     if (key & KBFLAG_RSHIFT)                 status |= 1 << 0;
     if (key & KBFLAG_LSHIFT)                 status |= 1 << 1;
     if (key & (KBFLAG_LCTRL | KBFLAG_RCTRL)) status |= (1 << 2) | (1 << 8);
@@ -123,10 +123,10 @@ class VirtualBiosKeyboard : public StaticReceiver<VirtualBiosKeyboard>, public B
   {
     CpuState *cpu = msg.cpu;
     COUNTER_INC("int16");
-    unsigned short next  = read_bda(0x1a);
-    unsigned short first = read_bda(0x1c);
-    unsigned short start = read_bda(0x80);
-    unsigned short end   = read_bda(0x82);
+    auto next  = read_bda<unsigned short>(0x1a);
+    auto first = read_bda<unsigned short>(0x1c);
+    auto start = read_bda<unsigned short>(0x80);
+    auto end   = read_bda<unsigned short>(0x82);
 
     switch (cpu->ah)
       {
@@ -136,7 +136,7 @@ class VirtualBiosKeyboard : public StaticReceiver<VirtualBiosKeyboard>, public B
           // XXX For AH=0x00 we need to discard extended keystrokes.
           if (first != next)
             {
-              cpu->ax = read_bda(next);
+              cpu->ax = read_bda<unsigned short>(next);
               next += 2;
               if (next > end)
                 next = start;
@@ -154,15 +154,15 @@ class VirtualBiosKeyboard : public StaticReceiver<VirtualBiosKeyboard>, public B
         if (first != next)
           {
             cpu->efl &= ~(1U << 6);
-            cpu->ax = read_bda(next);
+            cpu->ax = read_bda<unsigned short>(next);
           }
         break;
       case 0x12: // get pressed state of various keys
         /* not supported, but there the status bits should be */
-        cpu->ah = read_bda(0x18);
+        cpu->ah = read_bda<unsigned char>(0x18);
         /* fall through */
       case 0x02: // get enable state of various keys
-        cpu->al = read_bda(0x17);
+        cpu->al = read_bda<unsigned char>(0x17);
         break;
       case 0x03: // set typematic
         // ignored
@@ -183,16 +183,16 @@ public:
     if (msg.device == _hostkeyboard) {
       update_status(msg.data);
       unsigned value = keycode2bios(msg.data);
-      unsigned short next  = read_bda(0x1a);
-      unsigned short first = read_bda(0x1c);
-      unsigned short start = read_bda(0x80);
-      unsigned short end   = read_bda(0x82);
+      auto const next  = read_bda<unsigned short>(0x1a);
+      auto       first = read_bda<unsigned short>(0x1c);
+      auto const start = read_bda<unsigned short>(0x80);
+      auto const end   = read_bda<unsigned short>(0x82);
 
       first += 0x2;
       if (first >= end)   first = start;
       if (value && first != next)
         {
-          write_bda(read_bda(0x1c), value, 2);
+          write_bda(read_bda<unsigned short>(0x1c), value, 2);
           write_bda(0x1c, first, 2);
         }
       return true;
@@ -270,5 +270,5 @@ PARAM_HANDLER(vbios_keyboard,
               "vbios_keyboard:hostkeyboard - provide keyboard related virtual BIOS functions. Gets input from the given hostkeyboard.",
               "Example: 'vbios_keyboard:0x17'")
 {
-  new VirtualBiosKeyboard(mb, argv[0]);
+  new VirtualBiosKeyboard(mb, unsigned(argv[0]));
 }

@@ -27,6 +27,11 @@
 #include <nul/compiler.h>
 
 VMM_BEGIN_EXTERN_C
+
+/* turn warning off for external headers */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+
 #ifdef __MMX__
 #include <mmintrin.h>
 #endif
@@ -38,6 +43,10 @@ VMM_BEGIN_EXTERN_C
 #ifdef __SSSE3__
 #include <tmmintrin.h>
 #endif
+
+/* turn warnings on */
+#pragma GCC diagnostic pop
+
 VMM_END_EXTERN_C
 
 /* Constant-width integer types. */

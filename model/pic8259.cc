@@ -82,7 +82,7 @@ class PicDevice : public StaticReceiver<PicDevice>
       MessageIrqNotify msg(_virq, irq);
       _bus_notify.send(msg);
     }
-    _isr &= ~irq;
+    _isr &= uint8(~irq);
     propagate_irq(false);
   }
   void non_specific_eoi()
@@ -92,7 +92,7 @@ class PicDevice : public StaticReceiver<PicDevice>
 	unsigned irq = 1 << ((_prio_lowest + 1 + i) & 7);
 	if ((_isr & irq) && !(_smm && (~_imr & irq)))
 	  {
-	    specific_eoi(irq);
+	    specific_eoi(uint8(irq));
 	    return;
 	  }
       }
@@ -122,11 +122,11 @@ class PicDevice : public StaticReceiver<PicDevice>
    */
   bool prioritize_irq(unsigned char &irq_index, bool int_ack)
   {
-    unsigned char state = _irr & ~_imr;
+    unsigned char state = _irr & uint8(~_imr);
     for (unsigned i=0; i<8; i++)
       {
-	irq_index = (_prio_lowest + 1 + i) & 7;
-	unsigned irq = 1 << irq_index;
+        irq_index = (_prio_lowest + 1 + i) & 7;
+        unsigned irq = 1 << irq_index;
 
 	if (!_smm && (_isr & irq) && !((_icw[ICW4] & ICW4_SFNM) && (_icw[ICW3] & irq)))
 	  break;
@@ -134,9 +134,9 @@ class PicDevice : public StaticReceiver<PicDevice>
 	  {
 	    if (int_ack)
 	      {
-		_isr |= irq;
+		_isr |= uint8(irq);
 		if (~_elcr & irq)
-		  Cpu::atomic_and<unsigned char>(&_irr, ~irq);
+		  Cpu::atomic_and<unsigned char>(&_irr, uint8(~irq));
 
 		if (_icw[ICW4] & ICW4_AEOI)
 		  {
@@ -162,7 +162,7 @@ class PicDevice : public StaticReceiver<PicDevice>
 	_bus_legacy.send(msg);
       }
       else {
-	MessageIrqLines msg(MessageIrq::ASSERT_IRQ, _upstream_irq);
+	MessageIrqLines msg(MessageIrq::ASSERT_IRQ, uint8(_upstream_irq));
 	_bus_irq.send(msg);
       }
     }
@@ -244,7 +244,7 @@ class PicDevice : public StaticReceiver<PicDevice>
     else if (_poll_mode)
       {
 	_poll_mode = false;
-	unsigned char v = msg.value;
+	unsigned char v = uint8(msg.value);
 	if (prioritize_irq(v, true))  v |= 0x80;
 	msg.value = v;
       }
@@ -266,12 +266,12 @@ class PicDevice : public StaticReceiver<PicDevice>
 	return false;
 
       if (msg.port == _elcr_base)
-	_elcr = msg.value;
+	_elcr = uint8(msg.value);
       else if (msg.port == _base)
 	{
 	  if (msg.value & 0x10)
 	    {
-	      _icw[ICW1] = msg.value;
+	      _icw[ICW1] = uint8(msg.value);
 	      reset_values();
 	      _icw_mode = ICW2;
 	    }
@@ -311,7 +311,7 @@ class PicDevice : public StaticReceiver<PicDevice>
 	      _icw_mode = ICW4;
 	      if (~_icw[ICW1] & ICW1_SNGL)
 		{
-		  _icw[ICW3] = msg.value;
+		  _icw[ICW3] = uint8(msg.value);
 		  break;
 		}
 
@@ -321,14 +321,14 @@ class PicDevice : public StaticReceiver<PicDevice>
 	      _icw_mode = OCW1;
 	      if (_icw[ICW1] & ICW1_IC4)
 		{
-		  _icw[ICW4] = msg.value;
+		  _icw[ICW4] = uint8(msg.value);
 		  break;
 		}
 
 	      [[fallthrough]];
 
 	    case OCW1:
-	      _imr = msg.value;
+	      _imr = uint8(msg.value);
 	      propagate_irq(true);
 	      break;
 	    default:
@@ -426,14 +426,14 @@ PARAM_HANDLER(pic,
 	      "the first pic gets 0-7, the second one 8-15,... The optional elcr",
 	      "parameter specifies the io address of the ELCR register")
 {
-  static unsigned virq;
+  static uint8 virq;
   PicDevice *dev = new PicDevice(mb.bus_irqlines,
 				 mb.bus_pic,
 				 mb.bus_legacy,
 				 mb.bus_irqnotify,
-				 argv[0],
-				 argv[1],
-				 argv[2],
+				 uint16(argv[0]),
+				 uint8( argv[1]),
+				 uint16(argv[2]),
 				 virq);
   mb.bus_ioin.    add(dev, PicDevice::receive_static<MessageIOIn>);
   mb.bus_ioout.   add(dev, PicDevice::receive_static<MessageIOOut>);

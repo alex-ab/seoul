@@ -43,7 +43,7 @@ public:
   };
 private:
   uintptr_t      _framebuffer_ptr;
-  uintptr_t      _framebuffer_phys;
+  uint32         _framebuffer_phys; /* in VBE 2 only 32 bit field */
   size_t         _framebuffer_size;
   unsigned       _ebda_segment { };
   unsigned       _vbe_mode { };
@@ -63,7 +63,7 @@ private:
 
     bool update = false;
     for (size_t i=0; msg[i]; i++) {
-      if (Screen::vga_putc(0x0f00 | msg[i], reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET, pos))
+      if (Screen::vga_putc(0x0f00 | uint16(msg[i]), reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET, pos))
         update = true;
     }
     update_cursor(0, ((pos / 80) << 8) | (pos % 80));
@@ -80,8 +80,8 @@ private:
    * one of the active page.
    */
   void update_cursor(unsigned page, unsigned pos) {
-    write_bda(0x50 +  (page & 0x7) * 2, pos, 2);
-    pos = read_bda(0x50 + 2 * (read_bda(0x62) & 0x7));
+    write_bda(0x50 + uint16((page & 0x7) * 2), pos, 2);
+    pos = read_bda<unsigned>(0x50 + 2 * (read_bda<unsigned>(0x62) & 0x7));
     _regs.cursor_pos = TEXT_OFFSET + ((pos >> 8)*80 + (pos & 0xff));
   }
 
@@ -95,7 +95,7 @@ private:
    * Return the text mode cursor position in characters for a given page.
    */
   unsigned get_pos(unsigned page) {
-    unsigned res = read_bda(0x50 + (page & 0x7) * 2);
+    unsigned res = read_bda<unsigned>(0x50 + (page & 0x7) * 2);
     return (res >> 8)*80 + (res & 0xff);
   }
 
@@ -113,7 +113,7 @@ private:
   }
 
   static unsigned vesa_farptr(CpuState *cpu, void *p, void *base)  {
-    return (cpu->es.sel << 16) |  (cpu->di + reinterpret_cast<char *>(p) - reinterpret_cast<char *>(base));
+    return (unsigned(cpu->es.sel) << 16) | unsigned(cpu->di + reinterpret_cast<char *>(p) - reinterpret_cast<char *>(base));
   }
 
   unsigned get_vesa_mode(unsigned vesa_mode, ConsoleModeInfo *info)
@@ -126,14 +126,14 @@ private:
 	    // fix memory info
 	    size_t image_size = info->bytes_per_scanline * info->resolution[1];
 	    if (!image_size || image_size > _framebuffer_size)
-	      info->attr &= ~1u;
+	      info->attr &= 0xfffeu;
 	    else
 	      {
-		unsigned image_pages = (_framebuffer_size / image_size) - 1;
+		unsigned image_pages = unsigned((_framebuffer_size / image_size) - 1);
 		if (image_pages > 0xff) image_pages = 0xff;
-		info->number_images     = image_pages;
-		info->number_images_bnk = image_pages;
-		info->number_images_lin = image_pages;
+		info->number_images     = uint8(image_pages);
+		info->number_images_bnk = uint8(image_pages);
+		info->number_images_lin = uint8(image_pages);
 	      }
 	    return msg2.index;
 	  }
@@ -167,7 +167,7 @@ private:
 	  for (MessageConsole msg2(0, &info, CONSOLE_ID); msg2.index < (Vbe::MAX_VESA_MODES - 1) && _mb.bus_console.send(msg2); msg2.index++) {
 	    *modes++ = info._vesa_mode;
 	    /* remember highest mode index for flat panel request as preferred mode */
-	    _max_index = msg2.index;
+	    _max_index = uint8(msg2.index);
 	  }
 	  *modes++ = 0xffff;
 
@@ -179,8 +179,8 @@ private:
 	  p += strlen(p) + 1;
 	  assert (p < reinterpret_cast<char *>((&v)+1));
 
-	  v.memory = _framebuffer_size >> 16;
-	  size_t copy_size = (v.tag == Vbe::TAG_VBE2) ? sizeof(v) : 256;
+	  v.memory = uint16(_framebuffer_size >> 16);
+	  uint16 copy_size = (v.tag == Vbe::TAG_VBE2) ? sizeof(v) : 256;
 	  v.tag = Vbe::TAG_VESA;
 	  msg.vcpu->copy_out(cpu->es.base + cpu->di, &v, copy_size);
           cpu->ax = 0x004f;
@@ -200,7 +200,7 @@ private:
 	return true;
       case 0x4f02: // set vbemode
 	{
-	  ConsoleModeInfo info;
+	  ConsoleModeInfo info { };
 	  _last_videomode_request = cpu->ebx;
 	  unsigned index = get_vesa_mode(cpu->ebx & 0x0fff, &info);
 	  if (index != ~0u && info.attr & 1)
@@ -212,7 +212,7 @@ private:
 	      if (~cpu->ebx & 0x8000)  memset(framebuffer_ptr(), 0, _framebuffer_size);
 
 	      // switch mode
-	      _regs.mode =  index;
+	      _regs.mode = uint16(index);
 	      _vbe_mode = cpu->ebx;
 	      break;
 	    }
@@ -220,7 +220,7 @@ private:
 	  return true;
 	}
       case 0x4f03: // get vbemode
-	cpu->bx = _vbe_mode;
+	cpu->bx = uint16(_vbe_mode);
 	break;
       case 0x4f11: // flat panel info
       {
@@ -276,7 +276,7 @@ private:
       case 0x03: // get cursor
 	  cpu->ax = 0;
 	  cpu->cx = _regs.cursor_style;
-	  cpu->dx = read_bda(0x50 + (cpu->bh & 0x7) * 2);
+	  cpu->dx = read_bda<unsigned short>(0x50 + (cpu->bh & 0x7) * 2);
 	break;
       case 0x05: // set current page
 	write_bda(0x62, cpu->al & 7, 1);
@@ -284,7 +284,7 @@ private:
 	break;
       case 0x06: // scroll up window
 	{
-	  unsigned char current_page = read_bda(0x62);
+	  auto const current_page = read_bda<unsigned char>(0x62);
 	  unsigned short *base = reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET + get_page(current_page);
 	  unsigned rows = (cpu->al == 0) ? 25 : cpu->al;
 	  unsigned maxrow = cpu->dh < 25 ? cpu->dh : 24;
@@ -329,9 +329,9 @@ private:
 	{
 	  unsigned page  = get_page(cpu->bh);
 	  unsigned pos   = get_pos(cpu->bh);
-	  unsigned value = ((framebuffer_ptr()[2*(TEXT_OFFSET + page + pos) + 1] & 0xff) << 8);
+	  uint16   value = uint16(((framebuffer_ptr()[2*(TEXT_OFFSET + page + pos) + 1] & 0xff) << 8));
 
-	  value |= cpu->al;
+	  value = uint16(value | cpu->al);
 	  bool const update = Screen::vga_putc(value, reinterpret_cast<unsigned short *>(_framebuffer_ptr) + TEXT_OFFSET + page, pos);
 	  update_cursor(cpu->bh, ((pos / 80) << 8) | (pos % 80));
 
@@ -342,8 +342,8 @@ private:
 	}
 	break;
       case 0x0f: // get video mode
-	cpu->ax = read_bda(0x49);
-	cpu->bh = read_bda(0x62);
+	cpu->ax = read_bda<unsigned short>(0x49);
+	cpu->bh = read_bda<unsigned char>(0x62);
 	break;
       case 0x12:
 	switch (cpu->bl)
@@ -365,19 +365,19 @@ private:
 	  case 0x1130:        // get font information
 	    switch (cpu->bh) {
 	    case 0:
-	      cpu->es.sel   = read_bda(4*0x1f);
+	      cpu->es.sel   = read_bda<unsigned short>(4*0x1f);
 	      cpu->bp       = cpu->es.sel >> 16;
 	      cpu->es.sel  &= 0xffff;
 	      cpu->es.base  = cpu->es.sel << 4;
 	      break;
 	    case 1:
-	      cpu->es.sel   = read_bda(4*0x43);
+	      cpu->es.sel   = read_bda<unsigned short>(4*0x43);
 	      cpu->bp       = cpu->es.sel >> 16;
 	      cpu->es.sel  &= 0xffff;
 	      cpu->es.base  = cpu->es.sel << 4;
 	      break;
 	    case 5 ... 7:
-	      cpu->es.sel      = _ebda_segment;
+	      cpu->es.sel      = uint16(_ebda_segment);
 	      cpu->es.base     = cpu->es.sel << 4;
 	      cpu->bp          = EBDA_FONT_OFFSET;
 	      // we let the alternate tables start just before the
@@ -388,8 +388,8 @@ private:
 	      DEBUG(cpu);
 	    }
 	    DEBUG(cpu);
-	    cpu->cx = read_bda(0x85) & 0xff;
-	    cpu->dl = read_bda(0x84);
+	    cpu->cx = read_bda<unsigned short>(0x85) & 0xff;
+	    cpu->dl = uint8(read_bda<unsigned short>(0x84));
 	    msg.mtr_out |= MTD_DS_ES | MTD_GPR_BSD;
 	    break;
 	  case 0x1a00:        // display combination code
@@ -413,8 +413,8 @@ private:
 
   void set_videomode(mword videomode)
   {
-      ConsoleModeInfo info;
-      _regs.mode = get_vesa_mode(videomode & 0x0fff, &info);
+      ConsoleModeInfo info { };
+      _regs.mode = uint16(get_vesa_mode(videomode & 0x0fff, &info));
   }
 
 public:
@@ -436,7 +436,7 @@ public:
     bool res = false;
     for (unsigned i = 0; i < (1u << msg.type); i++)
       {
-	unsigned char value = msg.value >> i*8;
+	unsigned char value = uint8(msg.value >> i*8);
 	if (in_range(msg.port + i, _iobase, 32))
 	  {
 	    switch (msg.port + i - _iobase)
@@ -455,10 +455,10 @@ public:
 		switch (_crt_index)
 		  {
 		  case 0x0a: // cursor scanline start
-		    _regs.cursor_style = (value << 8) | (_regs.cursor_style & 0xff);
+		    _regs.cursor_style = uint16((value << 8) | (_regs.cursor_style & 0xff));
 		    break;
 		  case 0x0b: // cursor scanline end
-		    _regs.cursor_style = (_regs.cursor_style & ~0xff) | value;
+		    _regs.cursor_style = uint16((_regs.cursor_style & ~0xff) | value);
 		    break;
 		  case 0x0e: // cursor location high
 		    _regs.cursor_pos = TEXT_OFFSET + ((value << 8) | (_regs.cursor_pos & 0xff));
@@ -504,22 +504,22 @@ public:
 		switch (_crt_index)
 		  {
 		  case 0x0a: // cursor scanline start
-		    value = _regs.cursor_style >> 8;
+		    value = uint8(_regs.cursor_style >> 8);
 		    break;
 		  case 0x0b: // cursor scanline end
-		    value = _regs.cursor_style;
+		    value = uint8(_regs.cursor_style);
 		    break;
 		  case 0x0e: // cursor location high
-		    value = (_regs.cursor_pos - TEXT_OFFSET) >> 8;
+		    value = uint8((_regs.cursor_pos - TEXT_OFFSET) >> 8);
 		    break;
 		  case 0x0f: // cursor location low
-		    value = (_regs.cursor_pos - TEXT_OFFSET);
+		    value = uint8((_regs.cursor_pos - TEXT_OFFSET));
 		    break;
 		  case 0x0c: // start addres high
-		    value = (_regs.offset - TEXT_OFFSET) >> 8;
+		    value = uint8((_regs.offset - TEXT_OFFSET) >> 8);
 		    break;
 		  case 0x0d: // start addres low
-		    value = _regs.offset;
+		    value = uint8(_regs.offset);
 		    break;
 		  default:
 		    break;
@@ -640,11 +640,11 @@ public:
   }
 
 
-  Vga(Motherboard &mb, unsigned short iobase, char *fb_ptr, uintptr_t framebuffer_phys, size_t framebuffer_size)
-    : BiosCommon(mb), _framebuffer_ptr((uintptr_t)fb_ptr), _framebuffer_phys(framebuffer_phys), _framebuffer_size(framebuffer_size), _iobase(iobase)
+  Vga(Motherboard &mb, unsigned short iobase, char *fb_ptr, uint32 fb_phys, size_t fb_size)
+    : BiosCommon(mb), _framebuffer_ptr((uintptr_t)fb_ptr), _framebuffer_phys(fb_phys), _framebuffer_size(fb_size), _iobase(iobase)
   {
-    assert(!(framebuffer_phys & 0xfff));
-    assert(!(framebuffer_size & 0xfff));
+    assert(!(fb_phys & 0xfff));
+    assert(!(fb_size & 0xfff));
 
     handle_reset(false);
 
@@ -654,7 +654,7 @@ public:
     if (!mb.bus_console.send(msg))
       Logging::panic("could not alloc a VGA backend");
     _view = msg.view;
-    Logging::printf("VGA console %zx+%zx %zx\n", size_t(_framebuffer_phys), _framebuffer_size, _framebuffer_ptr);
+    Logging::printf("VGA console %x+%zx %zx\n", _framebuffer_phys, _framebuffer_size, _framebuffer_ptr);
 
     // switch to our console
     msg.type = MessageConsole::TYPE_SWITCH_VIEW;
@@ -680,7 +680,10 @@ PARAM_HANDLER(vga,
   if (!mb.bus_hostop.send(msg_iomem))
     Logging::panic("vga: failed to alloc io mem\n");
 
-  Vga *dev = new Vga(mb, argv[0], msg_iomem.ptr, msg_range.phys, msg_gui.size);
+  if (msg_range.phys >= (1ull << 32))
+    Logging::panic("framebuffer address to high\n");
+
+  Vga *dev = new Vga(mb, uint16(argv[0]), msg_iomem.ptr, unsigned(msg_range.phys), msg_gui.size);
   mb.bus_ioin     .add(dev, Vga::receive_static<MessageIOIn>);
   mb.bus_ioout    .add(dev, Vga::receive_static<MessageIOOut>);
   mb.bus_bios     .add(dev, Vga::receive_static<MessageBios>);
