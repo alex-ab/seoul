@@ -28,8 +28,8 @@ int helper_SYSENTER()
   _cpu->efl &= ~(EFL_VM | EFL_IF | EFL_RF);
   _cpu->cs.set(uint16(_cpu->sysenter_cs + 0), 0, 0xffffffff, 0xc9b);
   _cpu->ss.set(uint16(_cpu->sysenter_cs + 8), 0, 0xffffffff, 0xc93);
-  _cpu->rspx = _cpu->sysenter_esp;
-  _cpu->ripx = _cpu->sysenter_eip;
+  _cpu->rsp = _cpu->sysenter_esp;
+  _cpu->rip = _cpu->sysenter_eip;
   return _fault;
 }
 
@@ -92,7 +92,7 @@ int helper_STI() {
 template<unsigned operand_size>
 void __attribute__((regparm(3)))  helper_LEA()
 {
-  mword *tmp_dst = get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7);
+  mword *tmp_dst = get_reg32(_entry->data[_entry->offset_opcode] >> 3);
   auto virt = modrm2virt();
   move<operand_size>(tmp_dst, &virt);
 }
@@ -112,6 +112,6 @@ int helper_loadsegment(CpuState::Descriptor *desc)
   move<1>(&sel, reinterpret_cast<char *>(addr) + (1 << operand_size));
 
   if (!set_segment(desc, sel))
-    move<operand_size>(get_reg32((_entry->data[_entry->offset_opcode] >> 3) & 0x7), addr);
+    move<operand_size>(get_reg32(_entry->data[_entry->offset_opcode] >> 3), addr);
   return _fault;
 }

@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2008, Udo Steinberg <udo@hypervisor.org>
  * Copyright (C) 2008-2010, Bernhard Kauer <bk@vmmon.org>
- * Copyright (C) 2011, Alexander Boettcher <ab764283@os.inf.tu-dresden.de>
+ * Copyright (C) 2011-2023, Alexander Boettcher
  * Copyright (C) 2012, Julian Stecklina <jsteckli@os.inf.tu-dresden.de>
  * Economic rights: Technische Universitaet Dresden (Germany)
  *
@@ -44,8 +44,12 @@ enum {
   MTD_INJ             = 1ul << 17,
   MTD_STATE           = 1ul << 18,
   MTD_TSC             = 1ul << 19,
+  MTD_EFER            = 1ul << 20,
+  MTD_PDPTE           = 1ul << 21,
+  MTD_R8_R15          = 1ul << 22,
+  MTD_SYSCALL_SWAPGS  = 1ul << 23,
   MTD_IRQ             = MTD_RFLAGS | MTD_STATE | MTD_INJ | MTD_TSC,
-  MTD_ALL             = (~0U >> 12) & ~MTD_CTRL
+  MTD_ALL             = (0x000fffffu & ~MTD_CTRL) | MTD_EFER | MTD_R8_R15 | MTD_SYSCALL_SWAPGS
 };
 
 enum {
@@ -54,10 +58,15 @@ enum {
   INJ_WIN    = INJ_IRQWIN | INJ_NMIWIN
 };
 
-class ArchCpuState : public Utcb {
+class ArchCpuState : public Utcb
+{
 	public:
-		/* Set all values to zero. */
-		void clear() { memset(this, 0, sizeof(*this)); }
-};
 
-/* EOF */
+		/* set all values beside cpuid to zero. */
+		void clear()
+		{
+			auto const cpuid = head.cpuid;
+			memset(this, 0, sizeof(*this));
+			head.cpuid = cpuid;
+		}
+};
