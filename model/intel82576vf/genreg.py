@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 # -*- Mode: Python -*-
 
 ## Assumptions
@@ -21,16 +21,12 @@
 # The resulting code should be human-readable.
 
 import sys
-import imp
+import importlib.util
 from time import gmtime, strftime
 from getpass import getuser
 
-# Check if we can use binary literals (0b1010)
-if sys.version_info < (2, 6):
-    print("Your python is OLD! Please upgrade to 2.6.")
-
-def important_cmp(r1, r2):
-    return r2['important'] - r1['important']
+def takeImportant(element):
+    return element['important']
 
 def print_out(s):
     print(s)
@@ -50,9 +46,9 @@ def unsigned(n):
 # profile-guided optimization for hardware models. Good idea?
 def dispatch_gen(var, regs, filt, mangle, out, default = ""):
     out("\tswitch (%s/4) {" % (var))
-    for r in sorted(regs, important_cmp):
+    for r in sorted(regs, reverse=True, key=takeImportant):
         if filt(r):
-            out("\tcase 0x%x: %s break;" % (r['offset']/4, mangle(r) ))
+            out("\tcase 0x%x: %s break;" % (int(r['offset']/4), mangle(r) ))
     out ("\tdefault: /* Logging::printf(\"--> %%s UNKNOWN %%x\\n\", __PRETTY_FUNCTION__, %s);*/ %s break;" % (var, default))
     out ("\t}")
 
@@ -145,7 +141,6 @@ def class_gen(name, rset, out):
     # Resolve set references and provide some convenience
     out("/// -*- Mode: C++ -*-")
     out("/// This file has been automatically generated.")
-    out("/// Generated on %s by %s" % (strftime("%a, %d %b %Y %H:%M:%S", gmtime()), getuser()))
     for r in rset:
         assert r['offset'] % 4 == 0
         if 'important' not in r:
@@ -174,8 +169,12 @@ def class_gen(name, rset, out):
 # Main
 
 if __name__ == "__main__":
-    m = imp.load_source("foomod", sys.argv[1], open(sys.argv[1], 'r'))
+    spec = importlib.util.spec_from_file_location("foomod", sys.argv[1])
+    foo  = importlib.util.module_from_spec(spec)
+    sys.modules["foomod"] = foo
+    spec.loader.exec_module(foo)
+
     outfile = open(sys.argv[2], 'w')
-    class_gen(m.name, m.rset, make_file_out(outfile))
-        
+    class_gen(foo.name, foo.rset, make_file_out(outfile))
+
 # EOF

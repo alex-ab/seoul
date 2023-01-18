@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 """Check different patterns to get the encoding of an instruction and
 generate optimized handler functions.
 
@@ -6,301 +6,316 @@ We use an compile+disassemble approach to extract the encoding from
 the assembler.
 """
 
-import sys, os, tempfile, re
+import sys, os, tempfile, re, functools
 
 toolchain = os.environ.get('CROSS_DEV_PREFIX')
 if toolchain == None:
 	toolchain = ""
-print >>sys.stderr, "toolchain prefix "+(toolchain)
+print("toolchain prefix "+(toolchain), file=sys.stderr)
 
 def compile_and_disassemble(str, file, fdict):
-    if str not in fdict:
-	tmp = tempfile.NamedTemporaryFile(bufsize=0)
-	f = os.popen(toolchain+"as --32 -o %s -- 2> /dev/null"%(tmp.name), "w")
-	f.write(str+"\n")
-	f.close()
-	if os.path.exists(tmp.name):
-	    f = os.popen(toolchain+"objdump -w -d -z -M no-aliases,att-mnemonic %s"%tmp.name)
-	    l = f.readlines()
-	    line = (filter(lambda x: len(x) > 2 and x[:2]=="0:", map(lambda x: x.strip(), l)) + [""])[0]
+	if str not in fdict:
+		tmp = tempfile.NamedTemporaryFile()
+		f = os.popen(toolchain+"as --32 -o %s -- 2> /dev/null"%(tmp.name), "w")
+		f.write(str+"\n")
+		f.close()
+		if os.path.exists(tmp.name):
+			f = os.popen(toolchain+"objdump -w -d -z -M no-aliases,att-mnemonic %s"%tmp.name)
+			l = f.readlines()
+			line = (list(filter(lambda x: len(x) > 2 and x[:2]=="0:", list(map(lambda x: x.strip(), l)))) + [""])[0]
+		else:
+			open(tmp.name, "w")
+			line = ""
+		fdict[str] = line
+		file.write("%s#%s\n"%(str, line))
 	else:
-	    open(tmp.name, "w")
-	    line = ""
-	fdict[str] = line
-	file.write("%s#%s\n"%(str, line))
-    else:
-	line = fdict[str]
-    if line=="":  return None
-    l = map(lambda x: x.strip(), line.split("\t"))
-    # print >>sys.stderr, str, repr(line), l
-    l[1] = l[1].split()
-    return l
+		line = fdict[str]
+
+	if line=="":
+		return None
+
+	l = list(map(lambda x: x.strip(), line.split("\t")))
+	# print >>sys.stderr, str, repr(line), l
+	l[1] = l[1].split()
+	return l
 
 
 def no_modrm(res, prefix):
-    return prefix not in map(lambda x: x[3], filter(lambda y: "MODRM" in y[1], res))
+    return prefix not in list(map(lambda x: x[3], list(filter(lambda y: "MODRM" in y[1], res))))
 def no_grp(res, prefix):
-    return prefix not in map(lambda x: x[3][:-1], filter(lambda y: "GRP" in y[1], res))
+    return prefix not in list(map(lambda x: x[3][:-1], list(filter(lambda y: "GRP" in y[1], res))))
 
 def get_encoding(opcode, file, fdict):
-    templates = [("",                 0, lambda x: (" ".join(x[2].split()) == opcode[0] or "COMPLETE" in opcode[1]) and []),
-		 ("b",                0, lambda x: ["BYTE"]),
-		 ("l",                0, lambda x: []),
-		 ("  $0x12345, (%ecx), %edx",   5, lambda x: ["MODRMMEM", "MODRM", "IMMO", "DIRECTION"]),
-		 ("  $0x12,    (%edx), %ecx",   2, lambda x: ["MODRMMEM", "MODRM", "IMM1", "DIRECTION"]),
-		 ("  $0x12,    %ecx, (%edx)",   2, lambda x: ["MODRMMEM", "MODRM", "IMM1"]),
-		 ("  %ecx, (%edx)",   1, lambda x: ["MODRMMEM", "MODRM"]),
-		 ("  (%edx), %ecx",   1, lambda x: ["MODRMMEM", "MODRM", "DIRECTION"]),
-		 ("  %edx, %ecx",     1, lambda x: x[1][-1] == "d1" or x[1][-1] == "ca" and ["MODRMREG", "MODRM"]),
-		 ("  %cx, %bx",       1, lambda x: x[1][0]!= '66' and ["MODRMREG", "MODRM", "WORD"]),
-		 ("  %dl, (%edx)",    1, lambda x: ["MODRMMEM", "MODRM", "BYTE"]),
-		 ("  (%edx), %dl",    1, lambda x: ["MODRMMEM", "MODRM", "DIRECTION", "BYTE"]),
-		 ("  %dl, %dh",       1, lambda x: x[1][-1] == "ca" and ["MODRMREG", "MODRM", "BYTE"]),
-		 ("  $0x2, %dl",      1, lambda x: len(x[1]) > 2 and ["IMM1", "MODRM", "GRP", "BYTE"] or len(x[1]) == 2 and ["IMM1", "IMPL", "BYTE"]),
-		 ("  $0x12345678",    4, lambda x: ["IMMO"]),
-		 ("  $0x1234",        2, lambda x: x[1][:-4] not in map(lambda y: y[3], res) and ["IMM2"]),
-		 ("  $0x12",          1, lambda x: x[1][:-2] not in map(lambda y: y[3], res) and ["IMM1"]),
-		 ("  %al, (%dx)",     0, lambda x: ["PORT", "BYTE", "EDX"]),
-		 ("  %eax, (%dx)",    0, lambda x: ["PORT", "EDX"]),
-		 ("  (%dx), %al",     0, lambda x: ["PORT", "BYTE", "EDX"]),
-		 ("  (%dx), %eax",    0, lambda x: ["PORT", "EDX"]),
-		 ("  %eax, $0x42",    1, lambda x: len(x[1]) == 2 and ["IMM1", "PORT"]),
-		 ("  $0x42, %eax",    1, lambda x: len(x[1]) == 2 and ["IMM1", "PORT"]),
-		 ("  $0x2, %al",      1, lambda x: (not (len(x[1]) > 2 and x[1][:-2] in map(lambda y: y[3][:-1], res))
-						    and not (len(x[1]) == 2 and "IMPL" in res[-1][1]) and ["IMM1",  "EAX", "BYTE"])),
-		 ("  %al, $0x2",      1, lambda x: not (len(x[1]) > 2 and x[1][:-2] in map(lambda y: y[3][:-1], res)) and ["IMM1",  "EAX", "BYTE", "DIRECTION"]),
-		 ("  $0x12345, %edx", 4, lambda x: (len(x[1]) > 5 and x[1][:-5] not in map(lambda y: y[3], res) and ["IMMO", "MODRM", "GRP"]
-						    or len(x[1]) == 5 and ["IMMO", "IMPL"])),
-		 ("  $0x2, %edx",     1, lambda x: (not (len(x[1]) > 4 and x[1][:-4] in map(lambda x: x[3], res))
-						    and x[1][:-2] not in map(lambda y: y[3], res) and ["IMM1", "MODRM", "GRP"])),
-		 ("  $0x12345, %eax", 4, lambda x: (x[1][:-4] not in map(lambda y: y[3][:-1], res)
-						    and x[1][:-5] not in map(lambda y: y[3], res) and not (len(x[1]) == 5 and "IMPL" in res[-1][1]) and ["IMMO", "EAX"])),
-		 ("l %cl, (%eax)",    0, lambda x: ["OP1", "MODRM", "GRP", "ECX"]),
-		 ("b %cl, (%eax)",    0, lambda x: x[1][:-1] not in map(lambda y: y[3], res) and ["OP1", "MODRM", "GRP", "ECX", "BYTE"]),
-		 ("b (%eax)",         0, lambda x: ["OP1", "MODRM", "GRP", "BYTE"]),
-		 ("w (%eax)",         0, lambda x: x[1][0]!= '66' and ["OP1", "MODRM", "GRP", "WORD"]),
-		 ("l (%eax)",         0, lambda x: ["OP1", "MODRM", "GRP"]),
-		 ("  (%eax)",         0, lambda x: x[1] not in map(lambda x: x[3], res) and ["OP1", "MODRM", "GRP"]),
-		 ("  %edx",           0, lambda x: ["IMPLTEST", "TESTONLY"]),
-		 ("  %ecx",           0, lambda x: (x[1][:-1] in map(lambda x: x[3][:-1], filter(lambda y: "GRP" not in y[1], res)) and
-						    x[1][:-1] not in map(lambda x: x[3][:-1], filter(lambda y: "GRP" in y[1], res)) and ["IMPL"])),
-		 ("  %edx, %eax",     0, lambda x: (not (len(x[1]) > 1 and x[1][:-1] in map(lambda x: x[3], res))
-						    and not (len(x[1]) > 1 and x[1][:-1] in map(lambda x: x[3][:-1], res)) and ["EAX", "IMPL", "DIRECTION"])),
-		 ("  $0x1234,$0x12",  3, lambda x: ["IMM3"]),
-		 ("l $0x12344,(%edx)",4, lambda x: x[1][:-5] not in map(lambda x: x[3][:-1], filter(lambda y: "GRP" in y[1], res)) and ["OP1", "MODRM", "GRP", "IMMO"]),
-		 ("b $0x45, (%edx)",  1, lambda x: x[1][:-2] not in map(lambda x: x[3][:-1], filter(lambda y: "GRP" in y[1], res)) and ["OP1", "MODRM", "GRP", "IMM1", "BYTE"]),
-		 (" %eax, 0x1234",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS"]),
-		 (" 0x1234, %eax",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "DIRECTION"]),
-		 (" 0x1234, %al",     4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "DIRECTION", "BYTE"]),
-		 (" %al,  0x1234",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "BYTE"]),
-		 ]
-    # XXX add segment jmps
-    if "JMP" in opcode[1]:
-	templates = [
-	    (" *0x12345678", 4, lambda x: ["MODRM", "GRP"]),
-	    (" 0x12345678", 4, lambda x: x[1][:-4] not in map(lambda x: x[3], res) and ["IMMO"]),
-	    (" 1f; 1:", 1, lambda x: x[1][:-4] not in map(lambda x: x[3], res) and ["IMM1"]),
-	    (" $0x1234,$0x12345678", 6, lambda x: ["LONGJMP"]),
-	    ]
-    res = []
-    for postfix, length, func in templates:
-	l = compile_and_disassemble(opcode[0]+postfix, file, fdict)
-	flags = l and func(l)
-	if type(flags) == type([]):
-	    code = l[1][:len(l[1])-length - ("DROP1" in opcode[1] and 1 or 0)]
-	    # a LOCK prefix is valid?
-	    flags += "RMW" in opcode[1] and "DIRECTION" not in flags and "MODRM" in flags and ["LOCK"] or []
-	    res += [(opcode[0],
-	    	    filter(lambda x: x, opcode[1] + flags),
-	    	    opcode[2], code)]
-	    print >>sys.stderr, res[-1], l
-    if not res:
-	print >>sys.stderr, "error", opcode, res
-    return filter(lambda x: "TESTONLY" not in x[1], res)
+	templates = [("",                 0, lambda x: (" ".join(x[2].split()) == opcode[0] or "COMPLETE" in opcode[1]) and []),
+	             ("b",                0, lambda x: ["BYTE"]),
+	             ("l",                0, lambda x: []),
+	             ("  $0x12345, (%ecx), %edx",   5, lambda x: ["MODRMMEM", "MODRM", "IMMO", "DIRECTION"]),
+	             ("  $0x12,    (%edx), %ecx",   2, lambda x: ["MODRMMEM", "MODRM", "IMM1", "DIRECTION"]),
+	             ("  $0x12,    %ecx, (%edx)",   2, lambda x: ["MODRMMEM", "MODRM", "IMM1"]),
+	             ("  %ecx, (%edx)",   1, lambda x: ["MODRMMEM", "MODRM"]),
+	             ("  (%edx), %ecx",   1, lambda x: ["MODRMMEM", "MODRM", "DIRECTION"]),
+	             ("  %edx, %ecx",     1, lambda x: x[1][-1] == "d1" or x[1][-1] == "ca" and ["MODRMREG", "MODRM"]),
+	             ("  %cx, %bx",       1, lambda x: x[1][0]!= '66' and ["MODRMREG", "MODRM", "WORD"]),
+	             ("  %dl, (%edx)",    1, lambda x: ["MODRMMEM", "MODRM", "BYTE"]),
+	             ("  (%edx), %dl",    1, lambda x: ["MODRMMEM", "MODRM", "DIRECTION", "BYTE"]),
+	             ("  %dl, %dh",       1, lambda x: x[1][-1] == "ca" and ["MODRMREG", "MODRM", "BYTE"]),
+	             ("  $0x2, %dl",      1, lambda x: len(x[1]) > 2 and ["IMM1", "MODRM", "GRP", "BYTE"] or len(x[1]) == 2 and ["IMM1", "IMPL", "BYTE"]),
+	             ("  $0x12345678",    4, lambda x: ["IMMO"]),
+	             ("  $0x1234",        2, lambda x: x[1][:-4] not in list(map(lambda y: y[3], res)) and ["IMM2"]),
+	             ("  $0x12",          1, lambda x: x[1][:-2] not in list(map(lambda y: y[3], res)) and ["IMM1"]),
+	             ("  %al, (%dx)",     0, lambda x: ["PORT", "BYTE", "EDX"]),
+	             ("  %eax, (%dx)",    0, lambda x: ["PORT", "EDX"]),
+	             ("  (%dx), %al",     0, lambda x: ["PORT", "BYTE", "EDX"]),
+	             ("  (%dx), %eax",    0, lambda x: ["PORT", "EDX"]),
+	             ("  %eax, $0x42",    1, lambda x: len(x[1]) == 2 and ["IMM1", "PORT"]),
+	             ("  $0x42, %eax",    1, lambda x: len(x[1]) == 2 and ["IMM1", "PORT"]),
+	             ("  $0x2, %al",      1, lambda x: (not (len(x[1]) > 2 and x[1][:-2] in list(map(lambda y: y[3][:-1], res)))
+	                                                and not (len(x[1]) == 2 and "IMPL" in res[-1][1]) and ["IMM1",  "EAX", "BYTE"])),
+	             ("  %al, $0x2",      1, lambda x: not (len(x[1]) > 2 and x[1][:-2] in list(map(lambda y: y[3][:-1], res))) and ["IMM1",  "EAX", "BYTE", "DIRECTION"]),
+	             ("  $0x12345, %edx", 4, lambda x: (len(x[1]) > 5 and x[1][:-5] not in list(map(lambda y: y[3], res)) and ["IMMO", "MODRM", "GRP"]
+	                                                or len(x[1]) == 5 and ["IMMO", "IMPL"])),
+	             ("  $0x2, %edx",     1, lambda x: (not (len(x[1]) > 4 and x[1][:-4] in list(map(lambda x: x[3], res)))
+	                                                and x[1][:-2] not in list(map(lambda y: y[3], res)) and ["IMM1", "MODRM", "GRP"])),
+	             ("  $0x12345, %eax", 4, lambda x: (x[1][:-4] not in list(map(lambda y: y[3][:-1], res))
+	                                                and x[1][:-5] not in list(map(lambda y: y[3], res)) and not (len(x[1]) == 5 and "IMPL" in res[-1][1]) and ["IMMO", "EAX"])),
+	             ("l %cl, (%eax)",    0, lambda x: ["OP1", "MODRM", "GRP", "ECX"]),
+	             ("b %cl, (%eax)",    0, lambda x: x[1][:-1] not in list(map(lambda y: y[3], res)) and ["OP1", "MODRM", "GRP", "ECX", "BYTE"]),
+	             ("b (%eax)",         0, lambda x: ["OP1", "MODRM", "GRP", "BYTE"]),
+	             ("w (%eax)",         0, lambda x: x[1][0]!= '66' and ["OP1", "MODRM", "GRP", "WORD"]),
+	             ("l (%eax)",         0, lambda x: ["OP1", "MODRM", "GRP"]),
+	             ("  (%eax)",         0, lambda x: x[1] not in list(map(lambda x: x[3], res)) and ["OP1", "MODRM", "GRP"]),
+	             ("  %edx",           0, lambda x: ["IMPLTEST", "TESTONLY"]),
+	             ("  %ecx",           0, lambda x: (x[1][:-1] in list(map(lambda x: x[3][:-1], list(filter(lambda y: "GRP" not in y[1], res)))) and
+	                                                x[1][:-1] not in list(map(lambda x: x[3][:-1], list(filter(lambda y: "GRP" in y[1], res)))) and ["IMPL"])),
+	             ("  %edx, %eax",     0, lambda x: (not (len(x[1]) > 1 and x[1][:-1] in list(map(lambda x: x[3], res)))
+	                                                and not (len(x[1]) > 1 and x[1][:-1] in list(map(lambda x: x[3][:-1], res))) and ["EAX", "IMPL", "DIRECTION"])),
+	             ("  $0x1234,$0x12",  3, lambda x: ["IMM3"]),
+	             ("l $0x12344,(%edx)",4, lambda x: x[1][:-5] not in list(map(lambda x: x[3][:-1], list(filter(lambda y: "GRP" in y[1], res)))) and ["OP1", "MODRM", "GRP", "IMMO"]),
+	             ("b $0x45, (%edx)",  1, lambda x: x[1][:-2] not in list(map(lambda x: x[3][:-1], list(filter(lambda y: "GRP" in y[1], res)))) and ["OP1", "MODRM", "GRP", "IMM1", "BYTE"]),
+	             (" %eax, 0x1234",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS"]),
+	             (" 0x1234, %eax",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "DIRECTION"]),
+	             (" 0x1234, %al",     4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "DIRECTION", "BYTE"]),
+	             (" %al,  0x1234",    4, lambda x: no_modrm(res, x[1][:-5]) and no_grp(res, x[1][:-5]) and ["MOFS", "BYTE"]),
+	            ]
+
+	# XXX add segment jmps
+	if "JMP" in opcode[1]:
+		templates = [(" *0x12345678", 4, lambda x: ["MODRM", "GRP"]),
+	                 (" 0x12345678", 4, lambda x: x[1][:-4] not in list(map(lambda x: x[3], res)) and ["IMMO"]),
+	                 (" 1f; 1:", 1, lambda x: x[1][:-4] not in list(map(lambda x: x[3], res)) and ["IMM1"]),
+	                 (" $0x1234,$0x12345678", 6, lambda x: ["LONGJMP"]),
+	                ]
+
+	res = []
+	for postfix, length, func in templates:
+		l = compile_and_disassemble(opcode[0]+postfix, file, fdict)
+		flags = l and func(l)
+		if type(flags) == type([]):
+			code = l[1][:len(l[1])-length - ("DROP1" in opcode[1] and 1 or 0)]
+			# a LOCK prefix is valid?
+			flags += "RMW" in opcode[1] and "DIRECTION" not in flags and "MODRM" in flags and ["LOCK"] or []
+			res += [(opcode[0],
+			         list(filter(lambda x: x, opcode[1] + flags)),
+			         opcode[2], code)]
+			print(res[-1], l, file=sys.stderr)
+	if not res:
+		print("error", opcode, res, file=sys.stderr)
+
+	return list(filter(lambda x: "TESTONLY" not in x[1], res))
 
 
 def filter_chars(snippet, op_size, flags):
-    for m,n in [("[os]", "%d"%op_size), ("[data16]", op_size == 1 and "data16" or ""),
-		("[bwl]", "bwl"[op_size]), ("[qrr]", "qrr"[op_size]), ("[lock]", "LOCK" in flags and "lock" or ""),
-		("[EAX]", ("%%al","%%ax", "%%eax")[op_size]),
-		("[EDX]", ("%%dl","%%dx", "%%edx")[op_size]),
-		("[IMM]", filter(lambda x: x in ["IMM1", "IMM2", "IMMO", "CONST1"], flags) and "1" or "0"),
-		("[OP1]", "OP1" in flags and "1" or "0"),
-		("[IMMU]", "IMM1" in flags and "unsigned char" or "unsigned")]:
-	snippet = map(lambda x: x.replace(m, n), snippet)
-    return snippet
+	for m,n in [("[os]", "%d"%op_size), ("[data16]", op_size == 1 and "data16" or ""),
+	            ("[bwl]", "bwl"[op_size]), ("[qrr]", "qrr"[op_size]), ("[lock]", "LOCK" in flags and "lock" or ""),
+	            ("[EAX]", ("%%al","%%ax", "%%eax")[op_size]),
+	            ("[EDX]", ("%%dl","%%dx", "%%edx")[op_size]),
+	            ("[IMM]", list(filter(lambda x: x in ["IMM1", "IMM2", "IMMO", "CONST1"], flags)) and "1" or "0"),
+	            ("[OP1]", "OP1" in flags and "1" or "0"),
+	            ("[IMMU]", "IMM1" in flags and "unsigned char" or "unsigned")]:
+		snippet = list(map(lambda x: x.replace(m, n), snippet))
+	return snippet
 
 
 def generate_functions(name, flags, snippet, enc, functions, l2):
-    if not snippet:
-	l2.append("UNIMPLEMENTED(this)")
-	return
-    if "ASM" in flags and not "asm volatile" in ";".join(snippet):
-        # Be sure to duplicate %s
-        snippet = ['asm volatile("'+ ";".join([re.sub(r'([^%])%([^%0-9])', r'\1%%\2', s) for s in snippet])+'" : "+d"(tmp_src), "+c"(tmp_dst) : : "eax")']
-    if "FPU" in flags:
-        if "FPUNORESTORE" not in flags:  snippet = ['fxrstor (%%\" VMM_EXPAND(VMM_REG(ax)) \")'] + snippet
-        snippet = ['if (cache->_cpu->cr0 & 0xc) EXCEPTION(cache, 0x7, 0)',
-                   'asm volatile("' + ';'.join(snippet)+'; fxsave (%%\" VMM_EXPAND(VMM_REG(ax)) \");" : "+d"(tmp_src), "+c"(tmp_dst) : "a"(cache->_fpustate))']
-    if "CPL0" in flags:
-        snippet = ["if (cache->cpl0_test()) return"] + snippet
-    # parameter handling
-    imm = ";entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
-    additions = [("MEMONLY", "if (~entry->modrminfo & MRM_REG) {"),
-		 ("REGONLY", "		if (entry->modrminfo & MRM_REG) {"),
-		 ("OS2",     "		entry->operand_size = 2"),
-		 ("OS1",     "		entry->operand_size = 1"),
-		 ("CONST1",  "		entry->immediate = 1" + imm),
-		 ("IMM1",    "		fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
-		 ("IMM2",    "		fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
-		 ("IMM3",    "		fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
-		 ("IMMO",    imm),
-		 ("MOFS",    "		fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
-		 ("LONGJMP", "		fetch_code(entry, 2 + (1 << entry->operand_size))"),
-		 ("IMPL",    "		entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
-		 ("ECX",     "		entry->src = &_cpu->ecx"),
-		 ("EDX",     "		entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
-		 ("EAX",     "		entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
-		 ]
-    l2.extend(filter(lambda x: x, map(lambda x: x[0] in flags and x[1] or "", additions)))
+	if not snippet:
+		l2.append("UNIMPLEMENTED(this)")
+		return
 
-    # flag handling
-    f2 = ["LOADFLAGS", "SAVEFLAGS", "MODRM", "BYTE", "DIRECTION", "READONLY", "ASM", "RMW", "LOCK", "MOFS", "BITS", "QWORD"]
-    if "SKIPMODRM" in flags:                    f2.remove("MODRM")
-    if "IMM1" in flags and "BITS" in flags:     f2.remove("BITS")
-    if name in ["cltd"]:                        f2.remove("DIRECTION")
-    f = map(lambda x: "IC_%s"%x, filter(lambda x: x in f2, flags))
-    if f: l2.append("		entry->flags = %s"%"|".join(f))
+	if "ASM" in flags and not "asm volatile" in ";".join(snippet):
+		# Be sure to duplicate %s
+		snippet = ['asm volatile("'+ ";".join([re.sub(r'([^%])%([^%0-9])', r'\1%%\2', s) for s in snippet])+'" : "+d"(tmp_src), "+c"(tmp_dst) : : "eax")']
 
-    # operand size loop
-    s = ""
-    for op_size in range(3):
-	no_os = ("BYTE" in flags or "NO_OS" in flags) and "HAS_OS" not in flags
-	if no_os or op_size > 0:
-	    s += op_size == 1 and "	if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
-	    if "IMMO"   in flags:
-		s += "fetch_code(entry, %d);"%(1 << op_size)
-		s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);"  or
-		      op_size == 2 and "entry->immediate = *reinterpret_cast<int   *>(entry->data+entry->inst_len - 4);")
-	    funcname = "exec_%s_%s_%d"%("".join(enc), reduce(lambda x,y: x.replace(y, "_"), "% ,.()", name), op_size)
-	    s+= "entry->execute = %s; }"%funcname
-	    functions[funcname] = filter_chars(snippet, op_size, flags)
-	    if no_os: break
-    l2.append(s)
-    if "MEMONLY" in flags or "REGONLY" in flags:
-	l2.append("} else  { ")
-	l2.append('Logging::printf("%s not implemented at %%x - %%x instr %%02x%%02x%%02x\\n", _cpu->eip, entry->modrminfo, entry->data[0], entry->data[1], entry->data[2]); '%(name.replace("%", "%%")))
-	l2.append("UNIMPLEMENTED(this); }")
+	if "FPU" in flags:
+		if "FPUNORESTORE" not in flags:
+			snippet = ['fxrstor (%%\" VMM_EXPAND(VMM_REG(ax)) \")'] + snippet
+		snippet = ['if (cache->_cpu->cr0 & 0xc) EXCEPTION(cache, 0x7, 0)',
+		           'asm volatile("' + ';'.join(snippet)+'; fxsave (%%\" VMM_EXPAND(VMM_REG(ax)) \");" : "+d"(tmp_src), "+c"(tmp_dst) : "a"(cache->_fpustate))']
+
+	if "CPL0" in flags:
+		snippet = ["if (cache->cpl0_test()) return"] + snippet
+
+	# parameter handling
+	imm = ";entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
+	additions = [("MEMONLY", "if (~entry->modrminfo & MRM_REG) {"),
+	             ("REGONLY", "		if (entry->modrminfo & MRM_REG) {"),
+	             ("OS2",     "		entry->operand_size = 2"),
+	             ("OS1",     "		entry->operand_size = 1"),
+	             ("CONST1",  "		entry->immediate = 1" + imm),
+	             ("IMM1",    "		fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
+	             ("IMM2",    "		fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
+	             ("IMM3",    "		fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
+	             ("IMMO",    imm),
+	             ("MOFS",    "		fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
+	             ("LONGJMP", "		fetch_code(entry, 2 + (1 << entry->operand_size))"),
+	             ("IMPL",    "		entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
+	             ("ECX",     "		entry->src = &_cpu->ecx"),
+	             ("EDX",     "		entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
+	             ("EAX",     "		entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
+	            ]
+	l2.extend(list(filter(lambda x: x, list(map(lambda x: x[0] in flags and x[1] or "", additions)))))
+
+	# flag handling
+	f2 = ["LOADFLAGS", "SAVEFLAGS", "MODRM", "BYTE", "DIRECTION", "READONLY", "ASM", "RMW", "LOCK", "MOFS", "BITS", "QWORD"]
+	if "SKIPMODRM" in flags:                    f2.remove("MODRM")
+	if "IMM1" in flags and "BITS" in flags:     f2.remove("BITS")
+	if name in ["cltd"]:                        f2.remove("DIRECTION")
+	f = list(map(lambda x: "IC_%s"%x, list(filter(lambda x: x in f2, flags))))
+	if f: l2.append("		entry->flags = %s"%"|".join(f))
+
+	# operand size loop
+	s = ""
+	for op_size in range(3):
+		no_os = ("BYTE" in flags or "NO_OS" in flags) and "HAS_OS" not in flags
+		if no_os or op_size > 0:
+			s += op_size == 1 and "	if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
+			if "IMMO"   in flags:
+				s += "fetch_code(entry, %d);"%(1 << op_size)
+				s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);"  or
+				      op_size == 2 and "entry->immediate = *reinterpret_cast<int   *>(entry->data+entry->inst_len - 4);")
+			funcname = "exec_%s_%s_%d"%("".join(enc), functools.reduce(lambda x,y: x.replace(y, "_"), "% ,.()", name), op_size)
+			s+= "entry->execute = %s; }"%funcname
+			functions[funcname] = filter_chars(snippet, op_size, flags)
+			if no_os: break
+
+	l2.append(s)
+	if "MEMONLY" in flags or "REGONLY" in flags:
+		l2.append("} else  { ")
+		l2.append('Logging::printf("%s not implemented at %%x - %%x instr %%02x%%02x%%02x\\n", _cpu->eip, entry->modrminfo, entry->data[0], entry->data[1], entry->data[2]); '%(name.replace("%", "%%")))
+		l2.append("UNIMPLEMENTED(this); }")
 
 
 def generate_code(encodings):
-    code = {}
-    functions={}
-    code_prefixes=[]
-    l_in_p=-1
-    l_in_p_key=""
-    for i in range(len(encodings)):
-	name, flags, snippet, enc = encodings[i]
-	print >>sys.stderr, "%10s %s %s"%(name, enc, flags)
-	for l in range(len(enc)):
-	    key = enc[l]
-	    if l == len(enc)-1 or l == len(enc)-2 and "GRP" in flags:
-		if key != l_in_p_key :
-		    l_in_p     = -1
-		    l_in_p_key = enc
+	code          = {}
+	functions     = {}
+	code_prefixes = []
+	l_in_p        = -1
+	l_in_p_key    = ""
 
-		n = str(enc[:l])
-		if n not in code_prefixes:
-		    code_prefixes.append(n)
-		    code.setdefault(code_prefixes.index(n), {})
-		p = code[code_prefixes.index(n)]
-		l2 = []
-		if "PREFIX" in flags:  l2.extend(snippet)
-		if "MODRM"  in flags:
-		    l2.append("	get_modrm()")
-		    if "GRP" not in flags:
-			l2.append("	entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
-		if l == len(enc)-2:
-		    #override p[key] if former same instruction was shorter, e.g d3 and later d3 00
-		    start_switch = (key == l_in_p_key and l_in_p < len(enc))
-		    if start_switch or key not in p:
-			l2.append("	switch (entry->data[entry->offset_opcode] & 0x38) {")
-			l2.append('	default:')
-			l2.append('	Logging::printf("unimpl GRP case %02x%02x%02x at %d\\n", entry->data[0], entry->data[1], entry->data[2], __LINE__)')
-			l2.append("	UNIMPLEMENTED(this)")
-			l2.append('	}')
-			p[key] = l2
-		    l2 = []
-		    l2.append("	case 0x%s & 0x38: {"%enc[l+1])
-		    l2.append("	/* instruction '%s' %s %s */"%(name, enc, flags))
-		    generate_functions(name, flags, snippet, enc, functions, l2)
-		    l2.append("		break")
-		    l2.append("	}")
-		    p[key] = p[key][:2] + l2 + p[key][2:]
-		    l_in_p = len(enc)
-		elif key not in p:
-		    l2 = ["	/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
-		    if "PREFIX" not in flags:
-			generate_functions(name, flags, snippet, enc, functions, l2)
-		    if "IMPL" in flags:
-			  key = "%x ... %#x"%(int(key, 16) & ~0x7, int(key, 16) | 7)
-			  print >>sys.stderr, " IMPL"
-		    p[key] = l2
+	for i in range(len(encodings)):
+		name, flags, snippet, enc = encodings[i]
+		print(f'{name:10} {enc} {flags}', file=sys.stderr)
+		for l in range(len(enc)):
+			key = enc[l]
+			if l == len(enc)-1 or l == len(enc)-2 and "GRP" in flags:
+				if key != l_in_p_key :
+					l_in_p     = -1
+					l_in_p_key = enc
 
-		    l_in_p     = len(enc)
-		    l_in_p_key = key
-		break
-	    else:
-		n = str(enc[:l])
-		if n not in code_prefixes:
-		    code_prefixes.append(n)
-		    code[code_prefixes.index(n)] = {}
-		code[code_prefixes.index(n)].setdefault(key, ["op_mode = %d"%len(code_prefixes)])
-    return code, functions
+				n = str(enc[:l])
+				if n not in code_prefixes:
+					code_prefixes.append(n)
+					code.setdefault(code_prefixes.index(n), {})
+
+				p = code[code_prefixes.index(n)]
+				l2 = []
+
+				if "PREFIX" in flags:
+					l2.extend(snippet)
+
+				if "MODRM"  in flags:
+					l2.append("	get_modrm()")
+					if "GRP" not in flags:
+						l2.append("	entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
+
+				if l == len(enc) - 2:
+					#override p[key] if former same instruction was shorter, e.g d3 and later d3 00
+					start_switch = (key == l_in_p_key and l_in_p < len(enc))
+					if start_switch or key not in p:
+						l2.append("	switch (entry->data[entry->offset_opcode] & 0x38) {")
+						l2.append('	default:')
+						l2.append('	Logging::printf("unimpl GRP case %02x%02x%02x at %d\\n", entry->data[0], entry->data[1], entry->data[2], __LINE__)')
+						l2.append("	UNIMPLEMENTED(this)")
+						l2.append('	}')
+						p[key] = l2
+					l2 = []
+					l2.append("	case 0x%s & 0x38: {"%enc[l+1])
+					l2.append("	/* instruction '%s' %s %s */"%(name, enc, flags))
+					generate_functions(name, flags, snippet, enc, functions, l2)
+					l2.append("		break")
+					l2.append("	}")
+					p[key] = p[key][:2] + l2 + p[key][2:]
+					l_in_p = len(enc)
+				elif key not in p:
+					l2 = ["	/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
+					if "PREFIX" not in flags:
+						generate_functions(name, flags, snippet, enc, functions, l2)
+
+					if "IMPL" in flags:
+						key = "%x ... %#x"%(int(key, 16) & ~0x7, int(key, 16) | 7)
+						print(" IMPL", file=sys.stderr)
+
+					p[key]     = l2
+					l_in_p     = len(enc)
+					l_in_p_key = key
+				break
+			else:
+				n = str(enc[:l])
+				if n not in code_prefixes:
+				    code_prefixes.append(n)
+				    code[code_prefixes.index(n)] = {}
+				code[code_prefixes.index(n)].setdefault(key, ["op_mode = %d"%len(code_prefixes)])
+	return code, functions
 
 
 def print_code(code, functions):
-    names = functions.keys()
-    names.sort()
-    for funcname in names:
-	print """static void __attribute__((regparm(3))) %s(InstructionCache *cache, void *tmp_src, void *tmp_dst) {
-		 %s; }"""%(funcname, ";".join(functions[funcname]))
+	names = sorted(functions.keys())
+	for funcname in names:
+		print('static void __attribute__((regparm(3))) '+funcname+'(InstructionCache *cache, void *tmp_src, void *tmp_dst) {')
+		print('		',';'.join(functions[funcname])+'; }')
 
-    print "int handle_code_byte(InstructionCacheEntry *entry, unsigned char code, int &op_mode) {"
-    print "entry->offset_opcode = static_cast<unsigned char>(entry->inst_len);"
-    print "if (entry->offset_opcode >= InstructionCacheEntry::MAX_INSTLEN)"
-    print """  Logging::panic("offset_opcode too large");"""
-    print ""
-    print "switch (op_mode) {"
-    p = code.keys()
-    p.sort()
-    for i in p:
-	print """case 0x%s:
-	{
-	  switch(code) {"""%i
-	q = code[i].keys()
-	q.sort()
-	for j in q:
-	    print "case 0x%s:"%j
-	    print "{"
-	    for l in code[i][j]:
-		print l,";"
-	    print "	break;"
-	    print "}"
-	print """default:
+	print('int handle_code_byte(InstructionCacheEntry *entry, unsigned char code, int &op_mode) {')
+	print('entry->offset_opcode = static_cast<unsigned char>(entry->inst_len);')
+	print('if (entry->offset_opcode >= InstructionCacheEntry::MAX_INSTLEN)')
+	print('  Logging::panic("offset_opcode too large");')
+	print('')
+	print('switch (op_mode) {')
+	p = sorted(code.keys())
+	for i in p:
+		print('case 0x'+str(i)+":")
+		print('	{')
+		print('	  switch(code) {')
+		q = sorted(code[i].keys())
+		for j in q:
+			print('case 0x'+j+':')
+			print('{')
+			for l in code[i][j]:
+				print(l,";")
+			print("	break;")
+			print("}")
+		print('''default:
 	      fetch_code(entry, 4);
 	      Logging::printf("unimplemented case %x at line %d code %02x%02x%02x\\n", code, __LINE__, entry->data[0], entry->data[1], entry->data[2]);
 	      UNIMPLEMENTED(this);
 	  }
 	}
-	break;"""
-    print "default:  assert(0); }"
-    print "return _fault; }"
+	break;''')
+	print('default:  assert(0); }')
+	print('return _fault; }')
 
 
 FILE="build_instructions.cache"
 try:
-    fdict = dict(map(lambda x: x[:-1].split("#"), open(FILE, "r").readlines()))
+    fdict = dict(list(map(lambda x: x[:-1].split("#"), open(FILE, "r").readlines())))
 except:
     fdict = {}
 file = open(FILE, "a")
@@ -347,7 +362,8 @@ opcodes += [(x, ["ASM", x not in ["not"] and "SAVEFLAGS", x in ["dec", "inc"] an
 opcodes += [(x, ["ASM", "CONST1", x in ["rcr", "rcl"] and "LOADFLAGS", "SAVEFLAGS", "RMW"],
 	     ["xchg %\" VMM_EXPAND(VMM_REG(dx)) \", %\" VMM_EXPAND(VMM_REG(cx)) \"","movb (%\" VMM_EXPAND(VMM_REG(cx)) \"),%cl", "%s[bwl] %%cl, (%%\" VMM_EXPAND(VMM_REG(dx)) \")"%x]) for x in ["rol", "ror", "rcl", "rcr", "shl", "shr", "sar"]]
 opcodes += [(x, ["ASM", "SAVEFLAGS", "DIRECTION"], ["%s[bwl] (%%\" VMM_EXPAND(VMM_REG(dx)) \"), [EAX]"%x, "mov [EAX], (%\" VMM_EXPAND(VMM_REG(cx)) \")"]) for x in ["bsf", "bsr"]]
-ccflags = map(lambda x: compile_and_disassemble(".byte %#x, 0x00"%x, file, fdict)[2].split()[0][1:], range(0x70, 0x80))
+
+ccflags = list(map(lambda x: compile_and_disassemble(".byte %#x, 0x00"%x, file, fdict)[2].split()[0][1:], range(0x70, 0x80)))
 for i in range(len(ccflags)):
     ccflag = ccflags[i]
     opcodes += [("set" +ccflag, ["BYTE",   "ASM", "LOADFLAGS"], ["set%s (%%\" VMM_EXPAND(VMM_REG(cx)) \")"%ccflag])]
@@ -364,10 +380,11 @@ opcodes += [(x, [x[-1] == "b" and "BYTE", "HAS_OS"], [
 	    for x in ["movzxb", "movzxw", "movsxb", "movsxw"]]
 
 def add_helper(l, flags, params):
-    for x in l:
-	name = reduce(lambda x,y: x.replace(y, "_"), "% ,", x.upper())
-	if "NO_OS" not in flags: name += "<[os]>"
-	opcodes.append((x, flags, ["\ncache->helper_%s(%s)"%(name, params or "")]))
+	for x in l:
+		name = functools.reduce(lambda x,y: x.replace(y, "_"), "% ,", x.upper())
+		if "NO_OS" not in flags: name += "<[os]>"
+		opcodes.append((x, flags, ["\ncache->helper_%s(%s)"%(name, params or "")]))
+
 add_helper(["push", "lret", "ret"],                              ["DIRECTION"], "tmp_src")
 add_helper(["int", "aad", "aam"],                                ["NO_OS"], "*reinterpret_cast<unsigned char *>(tmp_src)")
 add_helper(["ljmp", "lcall", "call", "jmp",  "jecxz", "loop", "loope", "loopne"],
@@ -443,9 +460,10 @@ opcodes += [("mov %es,%edx", ["MODRM", "DROP1"], [
 	    ]
 
 for x in segment_list:
-    opcodes += [("push %"+x, [], ["cache->helper_PUSH<[os]>(&cache->_cpu->%s.sel)"%x]),
-		("pop %"+x, [], ["unsigned short sel", "cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
-		("l"+x, ["SKIPMODRM", "MODRM", "MEMONLY"], ["cache->helper_loadsegment<[os]>(&cache->_cpu->%s)"%x])]
+	opcodes += [("push %"+x, [], ["cache->helper_PUSH<[os]>(&cache->_cpu->%s.sel)"%x]),
+	            ("pop %"+x, [], ["unsigned short sel", "cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
+	            ("l"+x, ["SKIPMODRM", "MODRM", "MEMONLY"], ["cache->helper_loadsegment<[os]>(&cache->_cpu->%s)"%x])]
+
 opcodes += [(x, ["FPU", "FPUNORESTORE", "NO_OS"], [x]) for x in ["fninit"]]
 opcodes += [(x, ["FPU", "NO_OS"], [x+" (%%\" VMM_EXPAND(VMM_REG(cx)) \")"]) for x in ["fnstsw", "fnstcw", "ficom", "ficomp"]]
 opcodes += [(x, ["FPU", "NO_OS", "EAX"], ["fnstsw (%%\" VMM_EXPAND(VMM_REG(cx)) \")"]) for x in ["fnstsw %ax"]]
@@ -469,9 +487,12 @@ opcodes += [(x, [], []) for x in [
 	"rsm", "verr", "verw",
 	"getsec"]]
 
+def takeThird(element):
+	return element[3]
+
 # "salc" - 0xd6
-encodings = sum(map(lambda x: get_encoding(x, file, fdict), opcodes), [])
-encodings.sort(lambda x,y: cmp(x[3], y[3]))
+encodings = sum(list(map(lambda x: get_encoding(x, file, fdict), opcodes)), [])
+encodings.sort(key=takeThird)
 code, functions = generate_code(encodings)
 print("// -*- Mode: C++ -*-")
 print("// Automagically generated. Do not touch.")
