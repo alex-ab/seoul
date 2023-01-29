@@ -136,9 +136,12 @@ def filter_chars(snippet, op_size, flags):
 	return snippet
 
 
-def generate_functions(name, flags, snippet, enc, functions, l2):
+def generate_functions(name, flags, snippet, enc, functions, l2, tab):
+	if tab == 0: indenting = ""
+	else: indenting = "	"
+
 	if not snippet:
-		l2.append("UNIMPLEMENTED(this)")
+		l2.append(indenting+"UNIMPLEMENTED(this)")
 		return
 
 	if "ASM" in flags and not "asm volatile" in ";".join(snippet):
@@ -148,29 +151,29 @@ def generate_functions(name, flags, snippet, enc, functions, l2):
 	if "FPU" in flags:
 		if "FPUNORESTORE" not in flags:
 			snippet = ['fxrstor (%%\" VMM_EXPAND(VMM_REG(ax)) \")'] + snippet
-		snippet = ['if (cache->_cpu->cr0 & 0xc) EXCEPTION(cache, 0x7, 0)',
-		           'asm volatile("' + ';'.join(snippet)+'; fxsave (%%\" VMM_EXPAND(VMM_REG(ax)) \");" : "+d"(tmp_src), "+c"(tmp_dst) : "a"(cache->_fpustate))']
+		snippet = ['if (cache->_cpu->cr0 & 0xc)\n		EXCEPTION(cache, 0x7, 0)',
+		           '\n	asm volatile("' + ';'.join(snippet)+'; fxsave (%%\" VMM_EXPAND(VMM_REG(ax)) \");" : "+d"(tmp_src), "+c"(tmp_dst) : "a"(cache->_fpustate))']
 
 	if "CPL0" in flags:
-		snippet = ["if (cache->cpl0_test()) return"] + snippet
+		snippet = ["if (cache->cpl0_test()) return;\n	"] + snippet
 
 	# parameter handling
-	imm = ";entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
-	additions = [("MEMONLY", "if (~entry->modrminfo & MRM_REG) {"),
-	             ("REGONLY", "		if (entry->modrminfo & MRM_REG) {"),
-	             ("OS2",     "		entry->operand_size = 2"),
-	             ("OS1",     "		entry->operand_size = 1"),
-	             ("CONST1",  "		entry->immediate = 1" + imm),
-	             ("IMM1",    "		fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
-	             ("IMM2",    "		fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
-	             ("IMM3",    "		fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
-	             ("IMMO",    imm),
-	             ("MOFS",    "		fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
-	             ("LONGJMP", "		fetch_code(entry, 2 + (1 << entry->operand_size))"),
-	             ("IMPL",    "		entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
-	             ("ECX",     "		entry->src = &_cpu->ecx"),
-	             ("EDX",     "		entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
-	             ("EAX",     "		entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
+	imm = "; entry->%s = &entry->immediate"%("DIRECTION" in flags and "dst" or "src")
+	additions = [("MEMONLY", indenting+"if (~entry->modrminfo & MRM_REG) {"),
+	             ("REGONLY", indenting+"if (entry->modrminfo & MRM_REG) {"),
+	             ("OS2",     indenting+"entry->operand_size = 2"),
+	             ("OS1",     indenting+"entry->operand_size = 1"),
+	             ("CONST1",  indenting+"entry->immediate = 1" + imm),
+	             ("IMM1",    indenting+"fetch_code(entry, 1); entry->immediate = *reinterpret_cast<char  *>(entry->data+entry->inst_len - 1)" + imm),
+	             ("IMM2",    indenting+"fetch_code(entry, 2); entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2)" + imm),
+	             ("IMM3",    indenting+"fetch_code(entry, 3); entry->immediate = *reinterpret_cast<unsigned *>(entry->data+entry->inst_len - 3)" + imm),
+	             ("IMMO",    indenting+imm),
+	             ("MOFS",    indenting+"fetch_code(entry, 1 << entry->address_size); entry->src = &_cpu->eax"),
+	             ("LONGJMP", indenting+"fetch_code(entry, 2 + (1 << entry->operand_size))"),
+	             ("IMPL",    indenting+"entry->dst = get_reg<%d>(entry->data[entry->offset_opcode-1] & 0x7)"%("BYTE" in flags)),
+	             ("ECX",     indenting+"entry->src = &_cpu->ecx"),
+	             ("EDX",     indenting+"entry->%s = &_cpu->edx"%("DIRECTION" in flags and "dst" or "src")),
+	             ("EAX",     indenting+"entry->%s = &_cpu->eax"%("DIRECTION" in flags and "src" or "dst")),
 	            ]
 	l2.extend(list(filter(lambda x: x, list(map(lambda x: x[0] in flags and x[1] or "", additions)))))
 
@@ -180,28 +183,38 @@ def generate_functions(name, flags, snippet, enc, functions, l2):
 	if "IMM1" in flags and "BITS" in flags:     f2.remove("BITS")
 	if name in ["cltd"]:                        f2.remove("DIRECTION")
 	f = list(map(lambda x: "IC_%s"%x, list(filter(lambda x: x in f2, flags))))
-	if f: l2.append("		entry->flags = %s"%"|".join(f))
+
+	extra_if_indent = ""
+	if "MEMONLY" in flags or "REGONLY" in flags:
+		extra_if_indent = "	"
+
+	if f: l2.append(extra_if_indent+indenting+"entry->flags = %s"%"|".join(f))
 
 	# operand size loop
 	s = ""
 	for op_size in range(3):
 		no_os = ("BYTE" in flags or "NO_OS" in flags) and "HAS_OS" not in flags
 		if no_os or op_size > 0:
-			s += op_size == 1 and "	if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
+			s += extra_if_indent
+			s += op_size == 1 and "if (entry->operand_size == 1) {" or op_size == 2 and " else {" or "{"
 			if "IMMO"   in flags:
+				s += extra_if_indent
 				s += "fetch_code(entry, %d);"%(1 << op_size)
+				s += extra_if_indent
 				s += (op_size == 1 and "entry->immediate = *reinterpret_cast<short *>(entry->data+entry->inst_len - 2);"  or
 				      op_size == 2 and "entry->immediate = *reinterpret_cast<int   *>(entry->data+entry->inst_len - 4);")
 			funcname = "exec_%s_%s_%d"%("".join(enc), functools.reduce(lambda x,y: x.replace(y, "_"), "% ,.()", name), op_size)
-			s+= "entry->execute = %s; }"%funcname
+			s += extra_if_indent
+			s += "entry->execute = %s; }"%funcname
 			functions[funcname] = filter_chars(snippet, op_size, flags)
 			if no_os: break
 
-	l2.append(s)
+	l2.append(indenting+s)
 	if "MEMONLY" in flags or "REGONLY" in flags:
-		l2.append("} else  { ")
-		l2.append('Logging::printf("%s not implemented at %%x - %%x instr %%02x%%02x%%02x\\n", _cpu->eip, entry->modrminfo, entry->data[0], entry->data[1], entry->data[2]); '%(name.replace("%", "%%")))
-		l2.append("UNIMPLEMENTED(this); }")
+		l2.append(indenting+"} else { ")
+		l2.append(indenting+'	Logging::printf("%s not implemented at %%x - %%x instr %%02x%%02x%%02x\\n", _cpu->eip, entry->modrminfo, entry->data[0], entry->data[1], entry->data[2])'%(name.replace("%", "%%")))
+		l2.append(indenting+"	UNIMPLEMENTED(this)")
+		l2.append(indenting+"}")
 
 
 def generate_code(encodings):
@@ -233,32 +246,32 @@ def generate_code(encodings):
 					l2.extend(snippet)
 
 				if "MODRM"  in flags:
-					l2.append("	get_modrm()")
+					l2.append("get_modrm()")
 					if "GRP" not in flags:
-						l2.append("	entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
+						l2.append("entry->%s = get_reg<%d>((entry->data[entry->offset_opcode] >> 3) & 0x7)"%("src", "BYTE" in flags))
 
 				if l == len(enc) - 2:
 					#override p[key] if former same instruction was shorter, e.g d3 and later d3 00
 					start_switch = (key == l_in_p_key and l_in_p < len(enc))
 					if start_switch or key not in p:
-						l2.append("	switch (entry->data[entry->offset_opcode] & 0x38) {")
-						l2.append('	default:')
+						l2.append("switch (entry->data[entry->offset_opcode] & 0x38) {")
+						l2.append('default:')
 						l2.append('	Logging::printf("unimpl GRP case %02x%02x%02x at %d\\n", entry->data[0], entry->data[1], entry->data[2], __LINE__)')
 						l2.append("	UNIMPLEMENTED(this)")
-						l2.append('	}')
+						l2.append('}')
 						p[key] = l2
 					l2 = []
-					l2.append("	case 0x%s & 0x38: {"%enc[l+1])
+					l2.append("case 0x%s & 0x38: {"%enc[l+1])
 					l2.append("	/* instruction '%s' %s %s */"%(name, enc, flags))
-					generate_functions(name, flags, snippet, enc, functions, l2)
-					l2.append("		break")
-					l2.append("	}")
+					generate_functions(name, flags, snippet, enc, functions, l2, 1)
+					l2.append("	break")
+					l2.append("}")
 					p[key] = p[key][:2] + l2 + p[key][2:]
 					l_in_p = len(enc)
 				elif key not in p:
-					l2 = ["	/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
+					l2 = ["/* instruction2 '%s' %s %s */"%(name, enc, flags)] + l2
 					if "PREFIX" not in flags:
-						generate_functions(name, flags, snippet, enc, functions, l2)
+						generate_functions(name, flags, snippet, enc, functions, l2, 0)
 
 					if "IMPL" in flags:
 						key = "%x ... %#x"%(int(key, 16) & ~0x7, int(key, 16) | 7)
@@ -280,36 +293,41 @@ def generate_code(encodings):
 def print_code(code, functions):
 	names = sorted(functions.keys())
 	for funcname in names:
-		print('static void __attribute__((regparm(3))) '+funcname+'(InstructionCache *cache, void *tmp_src, void *tmp_dst) {')
-		print('		',';'.join(functions[funcname])+'; }')
+		print('')
+		print('static void __attribute__((regparm(3))) '+funcname+'(InstructionCache *cache, void *tmp_src, void *tmp_dst)')
+		print('{')
+		print('	'+';'.join(functions[funcname])+';')
+		print('}')
 
-	print('int handle_code_byte(InstructionCacheEntry *entry, unsigned char code, int &op_mode) {')
-	print('entry->offset_opcode = static_cast<unsigned char>(entry->inst_len);')
-	print('if (entry->offset_opcode >= InstructionCacheEntry::MAX_INSTLEN)')
-	print('  Logging::panic("offset_opcode too large");')
 	print('')
-	print('switch (op_mode) {')
+	print('int handle_code_byte(InstructionCacheEntry *entry, unsigned char code, int &op_mode)')
+	print('{')
+	print('	entry->offset_opcode = static_cast<unsigned char>(entry->inst_len);')
+	print('	if (entry->offset_opcode >= InstructionCacheEntry::MAX_INSTLEN)')
+	print('		Logging::panic("offset_opcode too large");')
+	print('')
+	print('	switch (op_mode) {')
 	p = sorted(code.keys())
 	for i in p:
-		print('case 0x'+str(i)+":")
-		print('	{')
-		print('	  switch(code) {')
+		print('	case 0x'+str(i)+": {")
+		print('		switch(code) {')
 		q = sorted(code[i].keys())
 		for j in q:
-			print('case 0x'+j+':')
-			print('{')
+			print('		case 0x'+j+':')
+			print('		{')
 			for l in code[i][j]:
-				print(l,";")
-			print("	break;")
-			print("}")
-		print('''default:
-	      fetch_code(entry, 4);
-	      Logging::printf("unimplemented case %x at line %d code %02x%02x%02x\\n", code, __LINE__, entry->data[0], entry->data[1], entry->data[2]);
-	      UNIMPLEMENTED(this);
-	  }
+				print('			'+l+';')
+			print("			break;")
+			print("		}")
+		print('''		default:
+			fetch_code(entry, 4);
+			Logging::printf("unimplemented case %x at line %d code %02x%02x%02x\\n", code, __LINE__, entry->data[0], entry->data[1], entry->data[2]);
+			UNIMPLEMENTED(this);
+		}
 	}
 	break;''')
-	print('default:  assert(0); }')
+	print('	default:  assert(0);')
+	print('	}')
 	print('return _fault; }')
 
 
@@ -374,16 +392,16 @@ for i in range(len(ccflags)):
 		 ['__attribute__((regparm(3))) int (*foo)(InstructionCache *, void *) = helper_JMP_static<[os]>',
 		  'asm volatile ("j%s 1f;call %%P0; 1:" : : "ic"(foo))'%(ccflags[i ^ 1])])]
 opcodes += [(x, [x[-1] == "b" and "BYTE", "HAS_OS"], [
-            "unsigned dummy",
-	    "tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
-	    """asm volatile("movl (%%2), %%0; [data16] %s (%%1), %%0; mov %%0, (%%2)" : "=a"(dummy), "+d"(tmp_src), "+c"(tmp_dst))"""%x])
+            "unsigned dummy = 0",
+	    "\n	tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+	    """\n	asm volatile("movl (%%2), %%0; [data16] %s (%%1), %%0; mov %%0, (%%2)" : "=a"(dummy), "+d"(tmp_src), "+c"(tmp_dst))"""%x])
 	    for x in ["movzxb", "movzxw", "movsxb", "movsxw"]]
 
 def add_helper(l, flags, params):
 	for x in l:
 		name = functools.reduce(lambda x,y: x.replace(y, "_"), "% ,", x.upper())
 		if "NO_OS" not in flags: name += "<[os]>"
-		opcodes.append((x, flags, ["\ncache->helper_%s(%s)"%(name, params or "")]))
+		opcodes.append((x, flags, ["cache->helper_%s(%s)"%(name, params or "")]))
 
 add_helper(["push", "lret", "ret"],                              ["DIRECTION"], "tmp_src")
 add_helper(["int", "aad", "aam"],                                ["NO_OS"], "*reinterpret_cast<unsigned char *>(tmp_src)")
@@ -418,50 +436,50 @@ opcodes += [(x, [], ["cache->send_message(CpuMessage::TYPE_%s)"%(x.upper())]) fo
 opcodes += [(x, ["DIRECTION"], [
 	    # 'Logging::printf("%s(%%x, %%x)\\n", cache->_cpu->eax, *reinterpret_cast<unsigned *>(tmp_dst))'%x,
 	    "unsigned edx = cache->_cpu->edx, eax = cache->_cpu->eax;",
-	    "asm volatile (\"1: ;"
+	    "\n	asm volatile (\"1: ;"
 	    "%s[bwl] (%%2);"
 	    "xor %%2, %%2;"
 	    "2: ; .section .data.fixup2; \" VMM_ASM_WORD_TYPE \" 1b, 2b, 2b-1b; .previous;"
 	    "\" : \"+a\"(eax), \"+d\"(edx), \"+c\"(tmp_src))"%x,
-	    "if (tmp_src) DE0(cache)",
-	    "cache->_cpu->eax = eax",
-	    "cache->_cpu->edx = edx",
+	    "\n	if (tmp_src) DE0(cache)",
+	    "\n	cache->_cpu->eax = eax",
+	    "\n	cache->_cpu->edx = edx",
 	    ]) for x in ["div", "idiv", "mul"]]
-opcodes += [(x, ["RMW"], ["unsigned count",
-			    "if ([IMM]) count = cache->_entry->immediate; else count = cache->_cpu->ecx",
-			    "tmp_src = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
-			    'asm volatile ("xchg %%\" VMM_EXPAND(VMM_REG(ax)) \", %%\" VMM_EXPAND(VMM_REG(cx)) \"; mov (%%\" VMM_EXPAND(VMM_REG(dx)) \"), %%edx; [data16] '+
+opcodes += [(x, ["RMW"], ["unsigned count = 0",
+			    "\n	if ([IMM]) count = cache->_entry->immediate; else count = cache->_cpu->ecx",
+			    "\n	tmp_src = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+			    '\n	asm volatile ("xchg %%\" VMM_EXPAND(VMM_REG(ax)) \", %%\" VMM_EXPAND(VMM_REG(cx)) \"; mov (%%\" VMM_EXPAND(VMM_REG(dx)) \"), %%edx; [data16] '+
 			    x+' %%cl, %%\" VMM_EXPAND(VMM_REG(dx)) \", (%%\" VMM_EXPAND(VMM_REG(ax)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(ax))  : "+a"(count), "+d"(tmp_src), "+c"(tmp_dst))',
-			    "cache->_cpu->efl = (cache->_cpu->efl & ~0x8d5) | (count  & 0x8d5)"])
+			    "\n	cache->_cpu->efl = (cache->_cpu->efl & ~0x8d5) | (count  & 0x8d5)"])
 	    for x in ["shrd", "shld"]]
-opcodes += [("imul", ["DIRECTION"], ["unsigned param, result",
-				 "tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
-				 "if ([IMM]) param = cache->_entry->immediate; else if ([OP1]) param = cache->_cpu->eax; else move<[os]>(&param, tmp_dst);",
+opcodes += [("imul", ["DIRECTION"], ["unsigned param = 0, result = 0",
+				 "\n	tmp_dst = cache->get_reg32((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
+				 "\n	if ([IMM]) param = cache->_entry->immediate; else if ([OP1]) param = cache->_cpu->eax; else move<[os]>(&param, tmp_dst);",
 				 # 'Logging::printf("IMUL %x * %x\\n", param, *reinterpret_cast<unsigned *>(tmp_src))',
-				 'asm volatile ("imul[bwl] (%%\" VMM_EXPAND(VMM_REG(cx)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(cx))  : "+a"(param), "=d"(result), "+c"(tmp_src))',
-				 "cache->_cpu->rflx = (cache->_cpu->rflx & ~0x8d5) | (reinterpret_cast<unsigned long>(tmp_src)  & 0x8d5)",
-				 "if ([OP1]) move<[os] ? [os] : 1>(&cache->_cpu->eax, &param)",
-				 "if ([OP1] && [os]) move<[os]>(&cache->_cpu->edx, &result)",
-				 "if (![OP1]) move<[os]>(tmp_dst, &param)",
+				 '\n	asm volatile ("imul[bwl] (%%\" VMM_EXPAND(VMM_REG(cx)) \"); pushf; pop %%" VMM_EXPAND(VMM_REG(cx))  : "+a"(param), "=d"(result), "+c"(tmp_src))',
+				 "\n	cache->_cpu->rflx = (cache->_cpu->rflx & ~0x8d5) | (reinterpret_cast<unsigned long>(tmp_src)  & 0x8d5)",
+				 "\n	if ([OP1]) move<[os] ? [os] : 1>(&cache->_cpu->eax, &param)",
+				 "\n	if ([OP1] && [os]) move<[os]>(&cache->_cpu->edx, &result)",
+				 "\n	if (![OP1]) move<[os]>(tmp_dst, &param)",
 				 # 'Logging::printf("IMUL %x:%x\\n", result, param)',
 				 ])]
 opcodes += [("mov %es,%edx", ["MODRM", "DROP1"], [
 	    "CpuState::Descriptor *dsc = &cache->_cpu->es + ((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7)",
-	    "move<[os]>(tmp_dst, &(dsc->sel))"]),
+	    "\n	move<[os]>(tmp_dst, &(dsc->sel))"]),
 	    ("mov %edx,%es", ["MODRM", "DROP1", "DIRECTION"], [
 	    "if (((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7) == 2) cache->_cpu->intr_state |= 2",
-	    "\ncache->set_segment(&cache->_cpu->es + ((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7), *reinterpret_cast<unsigned short *>(tmp_src))"]),
+	    "\n	cache->set_segment(&cache->_cpu->es + ((cache->_entry->data[cache->_entry->offset_opcode] >> 3) & 0x7), *reinterpret_cast<unsigned short *>(tmp_src))"]),
 	    ("pusha", [], ["for (unsigned i=0; i<8; i++) {",
-                           "if (i == 4) { if (cache->helper_PUSH<[os]>(&cache->_oesp)) return; }"
-                           "else if (cache->helper_PUSH<[os]>(cache->get_reg32(i))) return; }"]),
+                           "\n		if (i == 4) { if (cache->helper_PUSH<[os]>(&cache->_oesp)) return; }"
+                           "\n		else if (cache->helper_PUSH<[os]>(cache->get_reg32(i))) return;\n	}"]),
 	    ("popa", [], ["unsigned values[8]",
-                          "for (unsigned i=8; i; i--)  if (cache->helper_POP<[os]>(values+i-1)) return;",
-                          "for (unsigned i=0; i < 8; i++) if (i!=4) move<[os]>(cache->get_reg32(i), values+i)"]),
+                          "\n	for (unsigned i=8; i; i--) { if (cache->helper_POP<[os]>(values+i-1)) return; }",
+                          "\n	for (unsigned i=0; i < 8; i++) { if (i!=4) move<[os]>(cache->get_reg32(i), values+i); }"]),
 	    ]
 
 for x in segment_list:
 	opcodes += [("push %"+x, [], ["cache->helper_PUSH<[os]>(&cache->_cpu->%s.sel)"%x]),
-	            ("pop %"+x, [], ["unsigned short sel", "cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
+	            ("pop %"+x, [], ["unsigned short sel = 0", "\n	cache->helper_POP<[os]>(&sel) || cache->set_segment(&cache->_cpu->%s, sel)"%x, x == "ss" and "cache->_cpu->intr_state |= 2" or ""]),
 	            ("l"+x, ["SKIPMODRM", "MODRM", "MEMONLY"], ["cache->helper_loadsegment<[os]>(&cache->_cpu->%s)"%x])]
 
 opcodes += [(x, ["FPU", "FPUNORESTORE", "NO_OS"], [x]) for x in ["fninit"]]
@@ -471,10 +489,10 @@ opcodes += [(".byte 0xdb, 0xe4 ", ["NO_OS", "COMPLETE"], ["/* fnsetpm, on 287 on
 opcodes += [(x, [x not in ["bt"] and "RMW" or "READONLY", "SAVEFLAGS", "BITS", "ASM"], ["mov (%\" VMM_EXPAND(VMM_REG(dx)) \"), %eax",
 										       "and  $(8<<[os])-1, %eax",
 											"[lock] "+x+" [EAX],(%\" VMM_EXPAND(VMM_REG(cx)) \")"]) for x in ["bt", "btc", "bts", "btr"]]
-opcodes += [("cmpxchg", ["RMW"], ['char res; asm volatile("mov (%2), %2; [lock] cmpxchg [EDX], (%3); setz %1" : "+a"(cache->_cpu->eax), "=d"(res) : "d"(tmp_src), "c"(tmp_dst))',
-				  "if (res) cache->_cpu->efl |= EFL_ZF; else cache->_cpu->efl &= EFL_ZF"])]
-opcodes += [("cmpxchg8b", ["RMW", "NO_OS", "QWORD"], ['char res; asm volatile("[lock] cmpxchg8b (%3); setz %2" : "+a"(cache->_cpu->eax), "+d"(cache->_cpu->edx), "=c"(res) : "D"(tmp_dst), "b"(cache->_cpu->ebx), "c"(cache->_cpu->ecx))',
-				  "if (res) cache->_cpu->efl |= EFL_ZF; else cache->_cpu->efl &= EFL_ZF"])]
+opcodes += [("cmpxchg", ["RMW"], ['char res = 0;\n	asm volatile("mov (%2), %2; [lock] cmpxchg [EDX], (%3); setz %1" : "+a"(cache->_cpu->eax), "=d"(res) : "d"(tmp_src), "c"(tmp_dst))',
+				  "\n	if (res) cache->_cpu->efl |= EFL_ZF; else cache->_cpu->efl &= EFL_ZF"])]
+opcodes += [("cmpxchg8b", ["RMW", "NO_OS", "QWORD"], ['char res;\n	asm volatile("[lock] cmpxchg8b (%3); setz %2" : "+a"(cache->_cpu->eax), "+d"(cache->_cpu->edx), "=c"(res) : "D"(tmp_dst), "b"(cache->_cpu->ebx), "c"(cache->_cpu->ecx))',
+				  "\n	if (res) cache->_cpu->efl |= EFL_ZF; else cache->_cpu->efl &= EFL_ZF"])]
 opcodes += [("xadd", ["RMW", "ASM", "SAVEFLAGS"], ['mov (%\" VMM_EXPAND(VMM_REG(dx)) \"), [EAX]', '[lock] xadd [EAX], (%\" VMM_EXPAND(VMM_REG(cx)) \")', 'mov [EAX], (%\" VMM_EXPAND(VMM_REG(dx)) \")'])]
 
 # unimplemented instructions
