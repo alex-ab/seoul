@@ -676,7 +676,7 @@ PARAM_HANDLER(vga,
   if (!mb.bus_hostop.send(msg_range))
     Logging::panic("vga: failed to reserve io range\n");
 
-  MessageHostOp msg_iomem(MessageHostOp::OP_ALLOC_IOMEM, Vga::LOW_BASE, msg_gui.size);
+  MessageHostOp msg_iomem(MessageHostOp::OP_ALLOC_IOMEM_SMALL, Vga::LOW_BASE, msg_gui.size, Vga::LOW_SIZE);
   if (!mb.bus_hostop.send(msg_iomem))
     Logging::panic("vga: failed to alloc io mem\n");
 

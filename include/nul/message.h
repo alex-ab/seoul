@@ -480,6 +480,7 @@ struct MessageHostOp
       OP_ATTACH_MSI,
       OP_ALLOC_IOIO_REGION,
       OP_ALLOC_IOMEM,
+      OP_ALLOC_IOMEM_SMALL,
       OP_ALLOC_SEMAPHORE,
       OP_ALLOC_SERVICE_THREAD,
       OP_ALLOC_SERVICE_PORTAL,
@@ -510,7 +511,10 @@ struct MessageHostOp
     struct {
       char *ptr;
       size_t len;
-      phy_cpu_no cpu;
+      union {
+        struct { phy_cpu_no cpu; };
+        struct { phy_cpu_no len_short; };
+       };
       char const * desc;
     };
     struct {
@@ -578,9 +582,7 @@ struct MessageHostOp
 
   explicit MessageHostOp(VCpu *_vcpu) : type(OP_VCPU_CREATE_BACKEND), value(0), vcpu(_vcpu) {}
   explicit MessageHostOp(unsigned _module, char * _start, size_t _size=0) : type(OP_GET_MODULE), module(_module), start(_start), size(_size), cmdlen(0)  {}
-  explicit MessageHostOp(Type _type, unsigned long _value, size_t _len=0, unsigned _cpu=~0U) : type(_type), value(_value),
-                                                                                                      ptr(0), len(_len), cpu(_cpu) {}
-  explicit MessageHostOp(Type _type, void * _value, size_t _len=0) : type(_type), obj(_value), ptr(0), len(_len) {}
+  explicit MessageHostOp(Type _type, unsigned long _value, size_t _len=0, unsigned _cpu=~0U) : type(_type), value(_value), ptr(0), len(_len), cpu(_cpu) {}
 };
 
 
