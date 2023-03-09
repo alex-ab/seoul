@@ -39,6 +39,9 @@ int cpl0_test() {
       }
     else
       if (_entry->address_size == 1) virt &= 0xffff;
+
+    virt &= 0xffffffffu;
+
     if (!(~desc->limit) && !desc->base && desc->ar == 0xc93) return 0;
 
     // limit check
