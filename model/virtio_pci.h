@@ -96,6 +96,10 @@ class Virtio::Device
 			NOTIFY_OFF_MULTIPLIER = 8, /* for 64bit wide access */
 
 			PHYS_BAR_SIZE = 0x1000,
+
+			QUEUES_MAX = 4,
+
+			VIRTIO_QUEUE_SIZE = 512
 		};
 
 		uint8  const _irq;
@@ -119,8 +123,6 @@ class Virtio::Device
 		uint8        _device_status     { 0 };
 		uint8        _config_generation { 0 };
 		uint16       _queue_select      { 0 };
-
-		enum { QUEUES_MAX = 4, VIRTIO_QUEUE_SIZE = 512 };
 
 		struct Queue {
 			unsigned queue_size    { VIRTIO_QUEUE_SIZE };
