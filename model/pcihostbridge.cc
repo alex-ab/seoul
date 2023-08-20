@@ -215,11 +215,15 @@ public:
   }
 
 
-  void discovery() {
+  void discovery()
+  {
+    unsigned const bus     =  _busnum & 0xff;
+    unsigned const segment = (_busnum >> 8) & 0xffffu;
+
     size_t length = discovery_length("MCFG", 44);
     discovery_write_dw("MCFG", length +  0, _membase, 4);
     discovery_write_dw("MCFG", length +  4, static_cast<unsigned long long>(_membase) >> 32, 4);
-    discovery_write_dw("MCFG", length +  8, ((_busnum & 0xff) << 16) | (((_buscount-1) & 0xff) << 24) | ((_busnum >> 8) & 0xffff), 4);
+    discovery_write_dw("MCFG", length +  8, (bus << 16) | ((bus + ((_buscount-1) & 0xff)) << 24) | segment, 4);
     discovery_write_dw("MCFG", length + 12, 0);
 
     // reset via 0xcf9
@@ -240,8 +244,10 @@ PARAM_HANDLER(pcihostbridge,
 	      "If not iobase is given, no io-accesses are performed.",
 	      "Similar if membase is not given, MMCFG is disabled.")
 {
-  auto const busnum = unsigned(argv[0]);
-  PciHostBridge *dev = new PciHostBridge(mb, busnum, unsigned(argv[1]), uint16(argv[2]), argv[3]);
+  auto const busnum   = unsigned(argv[0]);
+  auto const buscount = unsigned((argv[1] == ~0UL || argv[1] == 0) ? 1ul : argv[1]);
+
+  PciHostBridge *dev = new PciHostBridge(mb, busnum, buscount, uint16(argv[2]), argv[3]);
 
   // ioport interface
   if (~argv[2]) {
@@ -258,11 +264,20 @@ PARAM_HANDLER(pcihostbridge,
   mb.bus_pcicfg.add(dev, PciHostBridge::receive_static<MessagePciConfig>);
   mb.bus_legacy.add(dev, PciHostBridge::receive_static<MessageLegacy>);
   mb.bus_bios.add  (dev, PciHostBridge::receive_static<MessageBios>);
+
+  /* configure primary, secondary and sub_ordinate */
+  unsigned const primary = 0u; /* XXX */
+  unsigned const bus     = busnum & 0xffu;
+  auto     const value   = primary | (bus << 8) | (bus + buscount - 1) << 16;
+
+  dev->PCI_write(PciHostBridge::PCI_BUS_offset, value);
 }
 #else
 VMM_REGSET(PCI,
        VMM_REG_RO(PCI_ID,  0x0, 0x27a08086)
        VMM_REG_RW(PCI_CMD, 0x1, 0x000900106, 0x0106,)
        VMM_REG_RO(PCI_CC,  0x2, 0x06000000)
-       VMM_REG_RO(PCI_SS,  0xb, 0x27a08086))
+       VMM_REG_RW(PCI_BUS, 0x6, 0x0, 0xffffffffu, 0)
+       VMM_REG_RO(PCI_SS,  0xb, 0x27a08086)
+       VMM_REG_RO(PCI_CAP, 0xd, 0x00))
 #endif
