@@ -26,7 +26,8 @@
  */
 class VirtualBiosMem : public StaticReceiver<VirtualBiosMem>, public BiosCommon
 {
-  DBus<MessageHostOp> &_bus_hostop;
+  DBus<MessageHostOp>    &_bus_hostop;
+  DBus<MessageMemRegion> &_bus_memregion;
 
   /**
    * Return the size of guest physical memory.
@@ -87,13 +88,52 @@ class VirtualBiosMem : public StaticReceiver<VirtualBiosMem>, public BiosCommon
 		  mmap.base = read_bda<unsigned>(0x13) << 10;
 		  mmap.size = 0xa0000 - mmap.base;
 		  mmap.type = 2;
-		  cpu->ebx++;
-		  break;
+
+		  [[fallthrough]];
 		case 2:
-		  mmap.base = 1 << 20;
-		  mmap.size = memsize() - (1<<20);
-		  cpu->ebx = 0;
+		{
+		  MessageMemRegion msg2((1 << 20) >> 12); /*XXX read out somehow ? */
+		  bool const ok = _mb.bus_memregion.send(msg2);
+
+		  /* fallthrough case */
+		  if (cpu->ebx == 1) {
+		    if (ok)
+		      cpu->ebx++;   /* more */
+		    else
+		      cpu->ebx = 0; /* end */
+
+		    break;
+		  }
+
+		  assert(ok);
+
+		  mmap.base = msg2.start_page << 12;
+		  mmap.size = msg2.count      << 12;
+
+		  [[fallthrough]];
+		}
+		case 3:
+		{
+		  MessageMemRegion msg2((1ull << 32) >> 12); /*XXX read out somehow ? */
+		  bool const ok = _mb.bus_memregion.send(msg2);
+
+		  /* fallthrough case */
+		  if (cpu->ebx == 2) {
+		    if (ok)
+		      cpu->ebx++;   /* more */
+		    else
+		      cpu->ebx = 0; /* end */
+
+		    break;
+		  }
+
+		  assert(ok);
+
+		  mmap.base = msg2.start_page << 12;
+		  mmap.size = msg2.count      << 12;
+		  cpu->ebx = 0; /* end */
 		  break;
+		}
 		default:
 		  mmap.type = 0;
 		  break;
@@ -155,7 +195,8 @@ public:
     }
   }
 
-  VirtualBiosMem(Motherboard &mb) : BiosCommon(mb), _bus_hostop(mb.bus_hostop)
+  VirtualBiosMem(Motherboard &mb)
+  : BiosCommon(mb), _bus_hostop(mb.bus_hostop), _bus_memregion(mb.bus_memregion)
   { }
 };
 

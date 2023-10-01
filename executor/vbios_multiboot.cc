@@ -89,10 +89,12 @@ private:
   /**
    * Initialize an MBI from the hip.
    */
-  unsigned long init_mbi(uintptr_t &rip) {
-
+  unsigned long init_mbi(uintptr_t &rip)
+  {
     MessageHostOp msg1(MessageHostOp::OP_GUEST_MEM, 0UL);
-    if (!(_mb.bus_hostop.send(msg1))) Logging::panic("could not find base address %x\n", 0);
+    if (!(_mb.bus_hostop.send(msg1)))
+      Logging::panic("could not find base address %x\n", 0);
+
     char *physmem = msg1.ptr;
     auto memsize = msg1.len;
     auto offset = _modaddr;
@@ -144,15 +146,53 @@ private:
     if (discovery_read_dw("bda", 0x13, _lowmem))
       _lowmem = (_lowmem & 0xffff) << 10;
 
-    MbiMmap mymap[] = {{20, 0, _lowmem, 0x1},
-		       {20, _lowmem, 0xa0000 - _lowmem, 2},
-		       {20, 1<<20, memsize - (1<<20), 0x1}};
-    m->mem_lower = 640;
-    m->mem_upper = unsigned((memsize >> 10) - 1024);
-    m->mmap_addr = unsigned(offset);
-    m->mmap_length = sizeof(mymap);
-    m->flags |= MBI_FLAG_MMAP | MBI_FLAG_MEM;
-    memcpy(physmem + m->mmap_addr, mymap, m->mmap_length);
+    auto element_offset = offset;
+
+    {
+        MbiMmap *entry = reinterpret_cast<MbiMmap *>(physmem + element_offset);
+        *entry = { 20, 0, _lowmem, 0x1 };
+        element_offset += 24;
+    }
+
+    {
+        MbiMmap *entry = reinterpret_cast<MbiMmap *>(physmem + element_offset);
+        *entry = { 20, _lowmem, 0xa0000 - _lowmem, 0x2 };
+        element_offset += 24;
+    }
+
+    {
+        MessageMemRegion msg2((1 << 20) >> 12); /*XXX read out somehow ? */
+        if (_mb.bus_memregion.send(msg2)) {
+
+           MbiMmap *entry = reinterpret_cast<MbiMmap *>(physmem + element_offset);
+           entry->size   = 20;
+           entry->base   = msg2.start_page << 12;
+           entry->length = msg2.count      << 12;
+           entry->type   = 1;
+
+           element_offset += 24;
+        }
+    }
+
+    {
+        MessageMemRegion msg2((1ull << 32) >> 12); /*XXX read out somehow ? */
+        if (_mb.bus_memregion.send(msg2)) {
+
+           MbiMmap &entry = *reinterpret_cast<MbiMmap *>(physmem + element_offset);
+           entry.size   = 20;
+           entry.base   = msg2.start_page << 12;
+           entry.length = msg2.count      << 12;
+           entry.type   = 1;
+
+           element_offset += 24;
+        }
+    }
+
+    m->mem_lower    = 640;
+    m->mem_upper    = unsigned((memsize >> 10) - 1024);
+    m->mmap_addr    = unsigned(offset);
+    m->mmap_length  = unsigned(element_offset - offset);
+    m->flags       |= MBI_FLAG_MMAP | MBI_FLAG_MEM;
 
     return mbi;
   };

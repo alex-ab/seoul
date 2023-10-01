@@ -71,13 +71,19 @@ PARAM_HANDLER(mem,
 		      "Example: 'mem:0,0xa0000' for the first 640k region",
 		      "Example: 'mem:0x100000' for all the memory above 1M")
 {
-
   MessageHostOp msg(MessageHostOp::OP_GUEST_MEM, 0UL);
   if (!mb.bus_hostop.send(msg))
     Logging::panic("%s failed to get physical memory\n", __PRETTY_FUNCTION__);
-  uintptr_t start = ~argv[0] ? argv[0] : 0;
-  uintptr_t end   = argv[1] > msg.len ? msg.len : argv[1];
+
+  uintptr_t const start = ~argv[0] ? argv[0] : 0;
+  uintptr_t const end   = argv[1] > msg.len ? msg.len : argv[1];
+
+  /* not enough VM memory configured for this memory controller */
+  if (end <= start)
+     return;
+
   Logging::printf("physmem: %lx [%lx, %lx]\n", msg.value, start, end);
+
   MemoryController *dev = new MemoryController(msg.ptr, start, end);
   // physmem access
   mb.bus_mem.add(dev,       MemoryController::receive_static<MessageMem>);
