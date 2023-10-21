@@ -156,7 +156,9 @@ struct MessageMemRegion
   uintptr_t count          { 0 };
   char *    ptr            { nullptr };
   bool      actual_physmem { false};
-  MessageMemRegion(uintptr_t _page) : page(_page) {}
+  bool      read_only      { false};
+  unsigned long const cr0  { 0 };
+  MessageMemRegion(uintptr_t _page, unsigned long cr0 = 0) : page(_page), cr0(cr0) {}
 };
 
 
@@ -484,6 +486,7 @@ struct MessageHostOp
       OP_ALLOC_SEMAPHORE,
       OP_ALLOC_SERVICE_THREAD,
       OP_ALLOC_SERVICE_PORTAL,
+      OP_DETACH_MEM,
       OP_ASSIGN_PCI,
       OP_VIRT_TO_PHYS,
       OP_GET_MODULE,

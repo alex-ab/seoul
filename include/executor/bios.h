@@ -21,6 +21,8 @@
 #define DEBUG(cpu)   Logging::printf("\t%s eax %x ebx %x ecx %x edx %x eip %x efl %x\n", __func__, cpu->eax, cpu->ebx, cpu->ecx, cpu->edx, cpu->eip, cpu->efl)
 
 #define BIOS_BASE 0xf0000
+#define BIOS_SIZE 0x10000
+#define BIOS_SHMEM_BASE (BIOS_BASE + 0x1000)
 
 
 class BiosCommon : public DiscoveryHelper<BiosCommon>

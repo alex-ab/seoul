@@ -308,16 +308,21 @@ private:
 public:
 
 
-  bool receive(MessageLegacy &msg) {
-     if (msg.type != MessageLegacy::RESET) return false;
+  bool receive(MessageLegacy &msg)
+  {
+    if (msg.type != MessageLegacy::RESET) return false;
 
-     // jump to the reset helper
-     discovery_write_dw("reset", 0, 0xea, 1);
-     discovery_write_dw("reset", 1, BIOS_RESET_VECTOR, 2);
-     discovery_write_dw("reset", 3, BIOS_BASE >> 4, 2);
+    /* detach read only mapping */
+    MessageHostOp op(MessageHostOp::OP_DETACH_MEM, BIOS_BASE, BIOS_SIZE);
+    _mb.bus_hostop.send(op);
 
-     // the BIOS release date
-     discovery_write_st("reset", 5, "01/01/08", 8);
+    // jump to the reset helper
+    discovery_write_dw("reset", 0, 0xea, 1);
+    discovery_write_dw("reset", 1, BIOS_RESET_VECTOR, 2);
+    discovery_write_dw("reset", 3, BIOS_BASE >> 4, 2);
+
+    // the BIOS release date
+    discovery_write_st("reset", 5, "01/01/08", 8);
     return false;
   }
 
@@ -374,8 +379,27 @@ public:
     return true;
   }
 
+  bool receive(MessageMemRegion &msg)
+  {
+    if ((msg.page < (BIOS_BASE >> 12)) ||
+        (msg.page >= ((BIOS_BASE + BIOS_SIZE) >> 12)))
+      return false;
+
+    if (!(msg.cr0 & 1u << 31))
+      return false;
+
+    /* map BIOS memory read only */
+    msg.start_page = BIOS_BASE >> 12;
+    msg.count      = BIOS_SIZE >> 12;
+    msg.ptr        = mem_ptr() + BIOS_BASE;
+    msg.read_only  = true;
+
+    return true;
+  }
+
   bool receive(MessageMem &msg) {
-    if (!msg.read || !in_range(msg.phys, BIOS_BASE, 0x10000)) return false;
+    if (!msg.read || !in_range(msg.phys, BIOS_BASE, BIOS_SIZE)) return false;
+
     /* give read only access to bios area */
     Cpu::move<2>(msg.ptr, mem_ptr() + msg.phys);
     return true;
@@ -393,4 +417,5 @@ PARAM_HANDLER(vbios_reset,
   mb.bus_legacy.add(dev,    VirtualBiosReset::receive_static<MessageLegacy>);
   mb.bus_discovery.add(dev, VirtualBiosReset::receive_static<MessageDiscovery>);
   mb.bus_mem.add(dev,       VirtualBiosReset::receive_static<MessageMem>);
+  mb.bus_memregion.add(dev, VirtualBiosReset::receive_static<MessageMemRegion>);
 }
