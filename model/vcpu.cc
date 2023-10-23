@@ -40,6 +40,9 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
   unsigned char debugioin[8192];
   unsigned char debugioout[8192];
 
+  bool _amd   { };
+  bool _intel { };
+
   void dprintf(const char *format, ...) {
     Logging::printf("[%2d] ", CPUID_EDXb);
     va_list ap;
@@ -119,20 +122,109 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     MISC_FEATURE_ENABLES = 0x140,
     IA32_PERFEVTSEL0     = 0x186,
     IA32_PERFEVTSEL1     = 0x187,
+    IA32_MISC_ENABLE     = 0x1a0, /* Intel */
 
-    MSR_AMD64_DE_CFG     = 0xc0011029,
-
-    MSR_K7_EVNTSEL0      = 0xc0010000,
-    MSR_K7_PERFCTR0      = 0xc0010004,
-    MSR_K7_EVNTSEL1      = 0xc0010001,
-    MSR_K7_PERFCTR1      = 0xc0010005,
-    MSR_K7_EVNTSEL2      = 0xc0010002,
-    MSR_K7_PERFCTR2      = 0xc0010006,
-    MSR_K7_EVNTSEL3      = 0xc0010003,
-    MSR_K7_PERFCTR3      = 0xc0010007,
+    IA32_SPEC_CTRL       = 0x48,
   };
 
-  void handle_rdmsr(CpuMessage &msg) {
+	enum AMD {
+	    MSR_PRED_CMD_IBPB    = 0x49, /* AMD indirect branch prediction barrier */
+
+	    MSR_K7_EVNTSEL0      = 0xc0010000,
+	    MSR_K7_PERFCTR0      = 0xc0010004,
+	    MSR_K7_EVNTSEL1      = 0xc0010001,
+	    MSR_K7_PERFCTR1      = 0xc0010005,
+	    MSR_K7_EVNTSEL2      = 0xc0010002,
+	    MSR_K7_PERFCTR2      = 0xc0010006,
+	    MSR_K7_EVNTSEL3      = 0xc0010003,
+	    MSR_K7_PERFCTR3      = 0xc0010007,
+
+	    AMD64_NB_CFG           = 0xc001001f,
+	    AMD_CORE_ENERGY_STATUS = 0xc001029a,
+	    AMD_PKG_ENERGY_STATUS  = 0xc001029b,
+	    AMD64_DE_CFG           = 0xc0011029,
+	};
+
+	enum Intel {
+		MSR_SMI_COUNT               = 0x34,
+		MSR_PKG_C3_RESIDENCY        = 0x3f8,
+		MSR_PKG_C6_RESIDENCY        = 0x3f9,
+		MSR_PKG_C7_RESIDENCY        = 0x3fa,
+		MSR_CORE_C3_RESIDENCY       = 0x3fc,
+		MSR_CORE_C6_RESIDENCY       = 0x3fd,
+		MSR_CORE_C7_RESIDENCY       = 0x3fe,
+		MSR_RAPL_POWER_UNIT         = 0x606,
+		MSR_PKG_C2_RESIDENCY        = 0x60d,
+		MSR_PKG_ENERGY_STATUS       = 0x611,
+		MSR_DRAM_ENERGY_STATUS      = 0x619,
+		MSR_PP0_ENERGY_STATUS       = 0x639,
+		MSR_PP1_ENERGY_STATUS       = 0x641,
+		MSR_PLATFORM_ENERGY_COUNTER = 0x64d,
+		MSR_PPERF                   = 0x64e,
+		MSR_UNC_PERF_GLOBAL_CTRL    = 0xe01,
+	};
+
+	bool _handle_rdmsr_intel(CpuMessage const &msg)
+	{
+		switch (msg.cpu->ecx) {
+		case MSR_SMI_COUNT:
+		case MSR_PPERF:
+		case MSR_PKG_C2_RESIDENCY:
+		case MSR_PKG_C3_RESIDENCY:
+		case MSR_PKG_C6_RESIDENCY:
+		case MSR_PKG_C7_RESIDENCY:
+		case MSR_CORE_C3_RESIDENCY:
+		case MSR_CORE_C6_RESIDENCY:
+		case MSR_CORE_C7_RESIDENCY:
+		case MSR_RAPL_POWER_UNIT:
+		case MSR_PKG_ENERGY_STATUS:
+		case MSR_DRAM_ENERGY_STATUS:
+		case MSR_PP0_ENERGY_STATUS:
+		case MSR_PP1_ENERGY_STATUS:
+		case MSR_PLATFORM_ENERGY_COUNTER:
+			msg.cpu->edx_eax(0);
+			return true;
+		default:
+			break;
+		}
+		return false;
+	}
+
+	bool _handle_rdmsr_amd(CpuMessage const &msg)
+	{
+		switch (msg.cpu->ecx) {
+		case AMD_PKG_ENERGY_STATUS:
+		case AMD_CORE_ENERGY_STATUS:
+		case AMD64_NB_CFG:
+		case AMD64_DE_CFG:
+		case MSR_K7_EVNTSEL0:
+		case MSR_K7_PERFCTR0:
+		case MSR_K7_EVNTSEL1:
+		case MSR_K7_PERFCTR1:
+		case MSR_K7_EVNTSEL2:
+		case MSR_K7_PERFCTR2:
+		case MSR_K7_EVNTSEL3:
+		case MSR_K7_PERFCTR3:
+			msg.cpu->edx_eax(0);
+			return true;
+		default:
+			break;
+		}
+		return false;
+	}
+
+	void handle_rdmsr(CpuMessage &msg)
+	{
+		bool handled = false;
+
+		if (_intel) handled = _handle_rdmsr_intel(msg);
+		if (_amd)   handled = _handle_rdmsr_amd(msg);
+
+		if (handled) {
+			msg.mtr_out |= MTD_GPR_ACDB;
+			return;
+		}
+
     switch (msg.cpu->ecx) {
     case 0x10:
       handle_rdtsc(msg);
@@ -142,7 +234,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       msg.cpu->edx_eax((&msg.cpu->sysenter_cs)[msg.cpu->ecx - 0x174]);
       break;
     case IA32_PLATFORM_ID: /* tinycore 64bit */
-    case 0x48: // IA32_SPEC_CTRL - speculation control
+    case IA32_SPEC_CTRL:
     case IA32_PMC0:
     case IA32_PMC1:
     case 0xce: /* MSR_PLATFORM_INFO */
@@ -152,6 +244,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     case 0x179: /* MCG CAP */
     case IA32_PERFEVTSEL0:
     case IA32_PERFEVTSEL1:
+    case IA32_MISC_ENABLE:
     case 0x250:
     case 0x258:
     case 0x259:
@@ -187,17 +280,6 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       msg.cpu->edx_eax(msg.cpu->kernel_gs);
       break;
 #endif
-    case MSR_AMD64_DE_CFG:
-    case MSR_K7_EVNTSEL0:
-    case MSR_K7_PERFCTR0:
-    case MSR_K7_EVNTSEL1:
-    case MSR_K7_PERFCTR1:
-    case MSR_K7_EVNTSEL2:
-    case MSR_K7_PERFCTR2:
-    case MSR_K7_EVNTSEL3:
-    case MSR_K7_PERFCTR3:
-      msg.cpu->edx_eax(0);
-      break;
     default:
       dprintf("unsupported rdmsr %x at %x\n",  msg.cpu->ecx, msg.cpu->eip);
       msg.cpu->edx_eax(0);
@@ -206,10 +288,48 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     msg.mtr_out |= MTD_GPR_ACDB;
   }
 
+	bool _handle_wrmsr_intel(CpuMessage const &msg) const
+	{
+		switch (msg.cpu->ecx) {
+		case MSR_UNC_PERF_GLOBAL_CTRL:
+			return true;
+		default:
+			break;
+		}
+		return false;
+	}
 
-  void handle_wrmsr(CpuMessage &msg)
-  {
-    CpuState *cpu = msg.cpu;
+	bool _handle_wrmsr_amd(CpuMessage const &msg) const
+	{
+		switch (msg.cpu->ecx) {
+		case AMD64_NB_CFG:
+		case AMD64_DE_CFG:
+		case MSR_K7_EVNTSEL0:
+		case MSR_K7_PERFCTR0:
+		case MSR_K7_EVNTSEL1:
+		case MSR_K7_PERFCTR1:
+		case MSR_K7_EVNTSEL2:
+		case MSR_K7_PERFCTR2:
+		case MSR_K7_EVNTSEL3:
+		case MSR_K7_PERFCTR3:
+			return true;
+		default:
+			break;
+		}
+		return false;
+	}
+
+	void handle_wrmsr(CpuMessage &msg)
+	{
+		bool handled = false;
+
+		if (_intel) handled = _handle_wrmsr_intel(msg);
+		if (_amd)   handled = _handle_wrmsr_amd(msg);
+
+		if (handled)
+			return;
+
+		CpuState *cpu = msg.cpu;
 
     switch (cpu->ecx)
       {
@@ -230,6 +350,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         break;
       case MISC_FEATURE_ENABLES: /* user mode monitor+mwait - not supported */
         break;
+      case MSR_PRED_CMD_IBPB:
+        break;
 
       case 0x174 ... 0x176:
         (&cpu->sysenter_cs)[cpu->ecx - 0x174] = uintptr_t(cpu->edx_eax());
@@ -244,7 +366,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         /* Intel: 12-63 bit reserved, AMD: 16-63 bit reserved */
         /* non masking out leads to SMP Linux early bootstrap issue */
         cpu->efer    = msg.cpu->edx_eax();
-        if (amd_cpu())
+        if (_amd)
           cpu->efer &= 0xfd01ull;
         else
           cpu->efer &= 0x0d01ull;
@@ -287,16 +409,6 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         assert(msg.mtr_in & MTD_SYSCALL_SWAPGS);
         break;
 #endif
-      case MSR_AMD64_DE_CFG:
-      case MSR_K7_EVNTSEL0:
-      case MSR_K7_PERFCTR0:
-      case MSR_K7_EVNTSEL1:
-      case MSR_K7_PERFCTR1:
-      case MSR_K7_EVNTSEL2:
-      case MSR_K7_PERFCTR2:
-      case MSR_K7_EVNTSEL3:
-      case MSR_K7_PERFCTR3:
-        break;
       default:
         dprintf("unsupported wrmsr %x <-(%x:%x) at %lx\n",
                 cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
@@ -304,21 +416,19 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       }
   }
 
-  bool amd_cpu() const
+  bool _cpu(char const * const cpu_string) const
   {
     unsigned const reg { };
     unsigned eax { }, ebx { }, ecx { }, edx { };
-
-    char const amd_string [] = "AuthenticAMD";
 
     CPUID_read(reg | 0, eax);
     CPUID_read(reg | 1, ebx);
     CPUID_read(reg | 2, ecx);
     CPUID_read(reg | 3, edx);
 
-    if (*reinterpret_cast<uint32 const *>(amd_string + 0) == ebx &&
-        *reinterpret_cast<uint32 const *>(amd_string + 4) == edx &&
-        *reinterpret_cast<uint32 const *>(amd_string + 8) == ecx)
+    if (*reinterpret_cast<uint32 const *>(cpu_string + 0) == ebx &&
+        *reinterpret_cast<uint32 const *>(cpu_string + 4) == edx &&
+        *reinterpret_cast<uint32 const *>(cpu_string + 8) == ecx)
         return true;
 
     return false;
@@ -326,6 +436,9 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
   void handle_cpu_init(CpuMessage &msg, bool reset) {
     CpuState *cpu = msg.cpu;
+
+    _amd   = _cpu("AuthenticAMD");
+    _intel = _cpu("GenuineIntel");
 
     // http://www.sandpile.org/ia32/initial.htm
     // XXX Review initial settings of {tr,ld,gd,id}.ar
@@ -352,7 +465,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     cpu->dr7      = 0x400;
 
 #ifdef __x86_64__
-    if (amd_cpu()) {
+    if (_amd) {
       /*
        * AMD-V spec. 15.5.1 Basic Operation -> Canonicalization and Consistency Checks
        * SVME must be set
@@ -736,8 +849,12 @@ VMM_REGSET(CPUID,
        VMM_REG_RW(CPUID_EDX1,  0x13, 0, ~0u,)
        VMM_REG_RW(CPUID_EDXb,  0xb3, 0, ~0u,)
        VMM_REG_RW(CPUID_EAX80, 0x80000000, 0x80000004, ~0u,)
+       VMM_REG_RW(CPUID_EBX80, 0x80000001, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX80, 0x80000002, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX80, 0x80000003, 0, ~0u,)
+       VMM_REG_RW(CPUID_EAX81, 0x80000010, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX81, 0x80000011, 0, ~0u,)
-       VMM_REG_RW(CPUID_ECX81, 0x80000012, 0x100000, ~0u,)
+       VMM_REG_RW(CPUID_ECX81, 0x80000012, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX81, 0x80000013, 0, ~0u,)
        VMM_REG_RW(CPUID_EAX82, 0x80000020, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX82, 0x80000021, 0, ~0u,)
