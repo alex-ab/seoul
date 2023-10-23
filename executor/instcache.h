@@ -393,7 +393,12 @@ public:
       }
 
       if (_fault) {
+        Logging::printf(".byte inst_len=%u cpuid=%lx rip=%lx qual=%llx", _entry->inst_len, _cpu->head.cpuid, _cpu->rip, _cpu->qual[1]);
+        for (unsigned i = 0; i < _entry->inst_len; i++)
+            Logging::printf("0x%02x%c", _entry->data[i], (i == _entry->inst_len - 1) ? '\n' : ',');
+
         _entry->inst_len = 0;
+
         Logging::printf("decode fault %x ip=%lx\n", _fault, _cpu->rip);
         return _fault;
       }
