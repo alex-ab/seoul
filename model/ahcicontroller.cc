@@ -106,8 +106,10 @@ public:
 	  PxCI &= ~mask;
 	  PxSACT &= ~mask;
 	}
+#if 0
 	else
 	  Logging::printf("not finished %x,%x inprogress %x\n", fis[0], fis[4], _inprogress);
+#endif
 	break;
       case 0x41: // dma setup fis
 	assert(fislen == 7);

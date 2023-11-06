@@ -38,24 +38,30 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
     WAKEUP_IRQ = 1,
   };
   unsigned _timer { 0 };
-  DiskParameter _disk_params[MAX_DISKS];
-  unsigned short _disk_count { 0xffff };
-  unsigned short _disk_boot;
+  DiskParameter _disk_params[MAX_DISKS] { };
 
-  bool _diskop_inprogress;
+  unsigned short const _disk_boot;
+  unsigned short const _disk_count;
 
-  void init_params() {
+  bool _init { };
+  bool _diskop_inprogress { };
+
+  void init_params()
+  {
+    _init = true;
+
     // get sectors of the disk
-    for (_disk_count = 0; _disk_count < MAX_DISKS; _disk_count++) {
-      MessageDisk msg2(_disk_count, &_disk_params[_disk_count]);
+    for (unsigned i = 0; i < _disk_count; i++) {
+      MessageDisk msg2(i, &_disk_params[i]);
       if (!_mb.bus_disk.send(msg2) || msg2.error) break;
     }
+
     write_bda(DISK_COUNT, _disk_count, 1);
   }
 
   bool check_drive(MessageBios &msg, unsigned &disk_nr)
   {
-    if (_disk_count == 0xffff) init_params();
+    if (!_init) init_params();
 
     disk_nr = msg.cpu->dl & 0x7f;
     if (msg.cpu->dl & 0x80 && disk_nr < _disk_count) return true;
@@ -308,8 +314,8 @@ public:
   }
 
 
-  VirtualBiosDisk(Motherboard &mb, unsigned short const disk_boot)
-  : BiosCommon(mb), _disk_params(), _disk_boot(disk_boot), _diskop_inprogress()
+  VirtualBiosDisk(Motherboard &mb, unsigned short const disk_boot, unsigned short disk_count)
+  : BiosCommon(mb), _disk_boot(disk_boot), _disk_count(disk_count)
   {
     mb.bus_diskcommit.add(this,  VirtualBiosDisk::receive_static<MessageDiskCommit>);
     mb.bus_timeout.add(this,     VirtualBiosDisk::receive_static<MessageTimeout>);
@@ -326,10 +332,13 @@ public:
 };
 
 PARAM_HANDLER(vbios_disk,
-	      "vbios_disk:boot_disknr - provide disk related virtual BIOS functions.",
-	      "Example: 'vbios_disk:0'")
+              "vbios_disk:boot_disknr:disk_count - provide disk related virtual BIOS functions.",
+              "Example: 'vbios_disk:0:1'")
 {
-  unsigned short const disk_nr = (argv[0] == ~0UL) ? 0 : static_cast<unsigned short>(argv[0]);
-  mb.bus_bios.add(new VirtualBiosDisk(mb, disk_nr), VirtualBiosDisk::receive_static<MessageBios>);
+	unsigned short disk_nr    = (argv[0] == ~0UL) ? 0 : static_cast<unsigned short>(argv[0]);
+	unsigned short disk_count = (argv[1] == ~0UL) ? 0 : static_cast<unsigned short>(argv[1]);
+
+	mb.bus_bios.add(new VirtualBiosDisk(mb, disk_nr, disk_count),
+	                VirtualBiosDisk::receive_static<MessageBios>);
 }
 
