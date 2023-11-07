@@ -327,7 +327,8 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		           unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               16 /* type */,
+			               16 /* virtio type */,
+			               0x03800001, /* display + GPU + rev 1 */
 			               0xf7a80000ull /* phys bar address XXX */,
 			               2 /* queues */),
 			_bus_console(bus_console)

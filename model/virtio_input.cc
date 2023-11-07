@@ -232,7 +232,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 		             unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               18 /* type */,
+			               18 /* virtio type */,
+			               0x09020001, /* pci class code (input), sub class (mouse), prog if, rev. id */
 			               0xf7a00000ull /* phys bar address XXX */,
 			               2 /* queues */)
 		{ }

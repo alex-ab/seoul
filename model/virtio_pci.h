@@ -104,6 +104,7 @@ class Virtio::Device
 
 		uint8  const _irq;
 		uint8  const _device_type;
+		uint32 const _pci_type; /* class code, sub class, prog if, rev. id */
 		uint8  const _queues_count;
 
 		uint16 const _bdf;
@@ -210,12 +211,11 @@ class Virtio::Device
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
 		       DBus<MessageMemRegion> &bus_memregion,
 		       unsigned char const irq, unsigned short const bdf,
-		       uint8 const device_type, uint64 const phys_bar_base,
-		       uint8 const queues_count)
+		       uint8 const device_type, uint32 const pci_class,
+		       uint64 const phys_bar_base, uint8 const queues_count)
 		:
-			_bus_irqlines(bus_irqlines),
-			_bus_memregion(bus_memregion),
-			_irq(irq), _device_type(device_type),
+			_bus_irqlines(bus_irqlines), _bus_memregion(bus_memregion),
+			_irq(irq), _device_type(device_type), _pci_type(pci_class),
 			_queues_count(queues_count), _bdf(bdf),
 			_phys_bar_base(phys_bar_base)
 		{ }
@@ -258,8 +258,8 @@ class Virtio::Device
 				case 0x04: /* status & control */
 					msg.value = _status | _control;
 					break;
-				case 0x08: /* class code (input), sub class (mouse), prog if, rev. id */
-					msg.value = 0x09020000;
+				case 0x08: /* class code, sub class, prog if, rev. id */
+					msg.value = _pci_type;
 					break;
 				case 0x0c: /* bist, header type, lat timer, cache */
 					msg.value = 0u;
@@ -273,6 +273,12 @@ class Virtio::Device
 							Logging::panic("phys bar addr too large\n");
 						msg.value = unsigned(_phys_bar_base);
 					}
+					break;
+				case 0x2c: /* subsystem ID, system vendor ID */
+					msg.value = 0x11101AF4u;
+					break;
+				case 0x30: /* expansion ROM addr */
+					msg.value = 0;
 					break;
 				case 0x34: /* capability pointer */
 					msg.value = 0x40;
@@ -312,6 +318,7 @@ class Virtio::Device
 					msg.value = _all_notify ? 0 : NOTIFY_OFF_MULTIPLIER;
 					break;
 				default:
+					msg.value = 0;
 					break;
 				}
 

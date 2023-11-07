@@ -350,7 +350,8 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		             unsigned char irq, unsigned short bdf)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               25 /* type */,
+			               25 /* virtio type */,
+			               0x04030001, /* pci class (multimedia), subclass (audio) */
 			               0xf7a90000ull /* phys bar address XXX */,
 			               4 /* queues */),
 			_bus_audio(bus_audio),
