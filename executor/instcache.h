@@ -462,11 +462,12 @@ public:
   {
     auto const reg = (reg_raw & 0x7) + (_entry->reg64() ? 8 : 0);
 
-    if (mode_64() && bytereg && reg >= 4 && reg < 8)
-       Logging::printf("%s reg=%u + byte %u\n", __func__, (reg & 0x3), ((reg & 0x4) >> 2));
+    /* use of rex() (even if 0) in mode_64() leads to spl, bpl, sil, dil instead of sp, bp, si, di */
+    bool sp_to_di_mode = bytereg && (!mode_64() ||
+                                     (mode_64() && !_entry->prefix_rex()));
 
     void *res = _cpu->gpr + reg;
-    if (bytereg && reg >= 4 && reg < 8 /* sp, bp, si, di */)
+    if (sp_to_di_mode && reg >= 4 && reg < 8 /* sp, bp, si, di */)
       res = reinterpret_cast<char *>(_cpu->gpr+(reg & 0x3)) + ((reg & 0x4) >> 2);
     return res;
   }
