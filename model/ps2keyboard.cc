@@ -30,27 +30,31 @@
  */
 class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 {
-  DBus<MessagePS2> &_bus_ps2;
-  unsigned _ps2port;
-  unsigned _hostkeyboard;
-  unsigned char _scset;
-  static const unsigned BUFFERSIZE = 18;
-  unsigned char _buffer[BUFFERSIZE];
-  unsigned _pread;
-  unsigned _pwrite;
-  unsigned _response;
-  unsigned char _no_breakcode[32];
-  unsigned char _indicators;
-  unsigned char _last_command;
-  unsigned char _last_reply;
-  enum {
-    MODE_DISABLED = 1 << 0,
-    MODE_RESET    = 1 << 1,
-    MODE_RESEND   = 1 << 2,
-    MODE_GOT_BREAK= 1 << 3,
-    MODE_STOPPED  = 1 << 4,
-  };
-  unsigned char _mode;
+	DBus<MessagePS2> &_bus_ps2;
+
+	enum {
+		MODE_DISABLED = 1 << 0,
+		MODE_RESET    = 1 << 1,
+		MODE_RESEND   = 1 << 2,
+		MODE_GOT_BREAK= 1 << 3,
+		MODE_STOPPED  = 1 << 4,
+	};
+
+	unsigned _ps2port      { };
+	unsigned _hostkeyboard { };
+	unsigned _pread        { };
+	unsigned _pwrite       { };
+	unsigned _response     { };
+
+	uint8    _mode         { MODE_DISABLED };
+
+	uint8    _scset        { };
+	uint8    _indicators   { };
+	uint8    _last_command { };
+	uint8    _last_reply   { };
+
+	uint8    _buffer[18]       { };
+	uint8    _no_breakcode[32] { };
 
 
   /**
@@ -70,20 +74,20 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	_mode &= uint8(~MODE_GOT_BREAK);
 	value = GenericKeyboard::translate_sc2_to_sc1(value);
       }
-    switch ((_pwrite - _pread) % BUFFERSIZE)
+    switch ((_pwrite - _pread) % sizeof(_buffer))
       {
-      case 0 ... BUFFERSIZE-3:
+      case 0 ... sizeof(_buffer)-3:
 	_buffer[_pwrite] = value;
 	break;
-      case BUFFERSIZE-2:
+      case sizeof(_buffer)-2:
 	// full
 	_buffer[_pwrite] = 0x00;
 	break;
       default:
-      case BUFFERSIZE-1:
+      case sizeof(_buffer)-1:
 	return;
       }
-    _pwrite = (_pwrite+1) % BUFFERSIZE;
+    _pwrite = (_pwrite+1) % sizeof(_buffer);
   }
 
   /**
@@ -94,23 +98,24 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
     while (*value)  enqueue(*value++);
   }
 
-  /**
-   * Reset the keyboard to its default state.
-   */
-  void reset()
-  {
-    // we use scset 2 here as we have translation on in the keyboard controller
-    _scset = 2;
-    _pread = 0;
-    _pwrite = 0;
-    _response = 0;
-    memset(_no_breakcode, 0, sizeof(_no_breakcode));
-    memcpy(_no_breakcode, "\x80\x81\x80\x80\x80\x80\x80\x82\x80\x80\xc0\xc1\xa4\xfa\xff\x66\x10", 17);
-    _indicators = 0;
-    _last_command = 0;
-    _last_reply = 0;
-    _mode = 0;
-  }
+	/**
+	 * Reset the keyboard to its default state.
+	 */
+	void reset()
+	{
+		// we use scset 2 here as we have translation on in the keyboard controller
+		_scset        = 2;
+		_pread        = 0;
+		_pwrite       = 0;
+		_response     = 0;
+		_indicators   = 0;
+		_last_command = 0;
+		_last_reply   = 0;
+		_mode         = MODE_DISABLED;
+
+		memset(_no_breakcode, 0, sizeof(_no_breakcode));
+		memcpy(_no_breakcode, "\x80\x81\x80\x80\x80\x80\x80\x82\x80\x80\xc0\xc1\xa4\xfa\xff\x66\x10", 17);
+	}
 
 
   /**
@@ -195,7 +200,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	if (msg.data & KBFLAG_RELEASE)   handle_shift_modifiers(msg.data);
 
 #if 0
-	if ((_pwrite - _pread) % BUFFERSIZE == BUFFERSIZE - 1)
+	if ((_pwrite - _pread) % sizeof(_buffer) == sizeof(_buffer) - 1)
 	  {
 	    _pwrite = oldwrite;
 	    enqueue(0x00);
@@ -253,7 +258,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	  {
 	    msg.value = _buffer[_pread];
 	    if (_pwrite != _pread)
-	      _pread = (_pread + 1) % BUFFERSIZE;
+	      _pread = (_pread + 1) % sizeof(_buffer);
 	    else
 	      return false;
 	  }
@@ -378,9 +383,9 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
     return true;
   }
 
- PS2Keyboard(DBus<MessagePS2>  &bus_ps2, unsigned ps2port, unsigned hostkeyboard)
-   : _bus_ps2(bus_ps2), _ps2port(ps2port), _hostkeyboard(hostkeyboard), _scset(), _buffer(), _pread(), _pwrite(), _response(), _no_breakcode(), _indicators(), _last_command(), _last_reply(), _mode()
-  {}
+	PS2Keyboard(DBus<MessagePS2> &bus_ps2, unsigned ps2port, unsigned hostkeyboard)
+	: _bus_ps2(bus_ps2), _ps2port(ps2port), _hostkeyboard(hostkeyboard)
+	{ }
 };
 
 PARAM_HANDLER(keyb,
