@@ -214,6 +214,10 @@ private:
 	      // switch mode
 	      _regs.mode = uint16(index);
 	      _vbe_mode = cpu->ebx;
+
+	      /* notify about vga/vesa switch */
+	      MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+	      _mb.bus_console.send(msg);
 	      break;
 	    }
 	  cpu->ax = 0x024f;
