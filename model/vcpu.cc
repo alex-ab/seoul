@@ -147,6 +147,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
 	enum Intel {
 		MSR_SMI_COUNT               = 0x34,
+		MSR_UNC_CBO_CONFIG          = 0x396,
 		MSR_PKG_C3_RESIDENCY        = 0x3f8,
 		MSR_PKG_C6_RESIDENCY        = 0x3f9,
 		MSR_PKG_C7_RESIDENCY        = 0x3fa,
@@ -157,18 +158,23 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 		MSR_PKG_C2_RESIDENCY        = 0x60d,
 		MSR_PKG_ENERGY_STATUS       = 0x611,
 		MSR_DRAM_ENERGY_STATUS      = 0x619,
+		MSR_PKG_C8_RESIDENCY        = 0x630,
+		MSR_PKG_C9_RESIDENCY        = 0x631,
+		MSR_PKG_C10_RESIDENCY       = 0x632,
 		MSR_PP0_ENERGY_STATUS       = 0x639,
 		MSR_PP1_ENERGY_STATUS       = 0x641,
 		MSR_PLATFORM_ENERGY_COUNTER = 0x64d,
 		MSR_PPERF                   = 0x64e,
+		MSR_CORE_C1_RESIDENCY       = 0x660,
 		MSR_UNC_PERF_GLOBAL_CTRL    = 0xe01,
+		ADL_UNC_PERF_GLOBAL_CTL     = 0x2ff0,
 	};
 
 	bool _handle_rdmsr_intel(CpuMessage const &msg)
 	{
 		switch (msg.cpu->ecx) {
 		case MSR_SMI_COUNT:
-		case MSR_PPERF:
+		case MSR_UNC_CBO_CONFIG:
 		case MSR_PKG_C2_RESIDENCY:
 		case MSR_PKG_C3_RESIDENCY:
 		case MSR_PKG_C6_RESIDENCY:
@@ -179,9 +185,14 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 		case MSR_RAPL_POWER_UNIT:
 		case MSR_PKG_ENERGY_STATUS:
 		case MSR_DRAM_ENERGY_STATUS:
+		case MSR_PKG_C8_RESIDENCY:
+		case MSR_PKG_C9_RESIDENCY:
+		case MSR_PKG_C10_RESIDENCY:
 		case MSR_PP0_ENERGY_STATUS:
 		case MSR_PP1_ENERGY_STATUS:
 		case MSR_PLATFORM_ENERGY_COUNTER:
+		case MSR_PPERF:
+		case MSR_CORE_C1_RESIDENCY:
 			msg.cpu->edx_eax(0);
 			return true;
 		default:
@@ -292,6 +303,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 	{
 		switch (msg.cpu->ecx) {
 		case MSR_UNC_PERF_GLOBAL_CTRL:
+		case ADL_UNC_PERF_GLOBAL_CTL:
 			return true;
 		default:
 			break;
