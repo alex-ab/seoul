@@ -437,6 +437,8 @@ struct MessageConsole
       unsigned y;
       unsigned width;
       unsigned height;
+      unsigned hot_x;
+      unsigned hot_y;
     };
   };
   MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id) : type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}

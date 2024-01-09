@@ -752,6 +752,9 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 			msg.y      = flush.r.y;
 			msg.width  = flush.r.width;
 			msg.height = flush.r.height;
+			msg.hot_x  = 0;
+			msg.hot_y  = 0;
+
 			_bus_console.send(msg);
 		});
 
@@ -869,15 +872,13 @@ size_t Virtio_gpu::_gpu_cursor(uintptr_t const in,  size_t const in_size,
 
 		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, console_id);
 		msg.view   = 1;
-#if 0
-		msg.x      = cursor.hot_x;
-		msg.y      = cursor.hot_y;
-#else
 		msg.x      = VMM_MIN(cursor.pos.x, mode_width);
 		msg.y      = VMM_MIN(cursor.pos.y, mode_height);
-#endif
 		msg.width  = resource.width;
 		msg.height = resource.height;
+		msg.hot_x  = cursor.hot_x;
+		msg.hot_y  = cursor.hot_y;
+
 		_bus_console.send(msg);
 	});
 
