@@ -1,7 +1,7 @@
 /**
  * Virtio GPU device, without 3D or VGA support
  *
- * Copyright (C) 2021-2022, Alexander Boettcher
+ * Copyright (C) 2021-2024, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -22,7 +22,7 @@
 #include "virtio_pci.h"
 
 enum {
-	GPU_MAX_SCANOUTS = 16,
+	GPU_MAX_SCANOUTS = 1,
 	VIRTIO_GPU_EVENT = 1,
 };
 
@@ -171,7 +171,9 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 	private:
 
 		DBus<MessageConsole> &_bus_console;
-		Virtio_gpu_config     _config { };
+		Virtio_gpu_config     _config          { };
+		bool                  _memory_pressure { };
+		bool const            _verbose;
 
 		~Virtio_gpu();
 
@@ -179,71 +181,106 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			void *        memory_vmm;
 			gpu_mem_entry guest_fb_memory[1280];
 			unsigned      valid_memory_entries;
-			uint32          format;
-			uint16          valid;
-			uint32          resource_id;
-			uint32          width;
-			uint32          height;
-			gpu_rect        scanout;
-			uint32          scanout_id;
-			bool            scanout_valid;
-		} resources_2d [16] { };
+			uint32        format;
+			uint16        valid;
+			uint32        resource_id;
+			uint32        width;
+			uint32        height;
+			gpu_rect      scanout;
+			uint32        scanout_id;
+			bool          scanout_valid;
+		} resources_2d [64] { };
 
 		template <typename FUNC>
 		bool create_resource_2d(FUNC const &fn)
 		{
-			for (unsigned i = 0; i < sizeof(resources_2d) / sizeof(resources_2d[0]); i++) {
-				if (resources_2d[i].valid)
+			for (auto &resource : resources_2d) {
+				if (resource.valid)
 					continue;
-				resources_2d[i].valid = true;
-				fn(resources_2d[i]);
+				resource.valid = true;
+				fn(resource);
 				return true;
 			}
 			return false;
 		}
 
-		void free_resource(struct resource_2d &resource)
+		void free_resource(struct resource_2d &res)
 		{
-			MessageConsole msg(MessageConsole::TYPE_FREE_VIEW,
-			                   console_id);
-			msg.view = uint16(2 + resource.resource_id); /* XXX */
-			_bus_console.send(msg);
+			auto const size = res.width * res.height * 4; /* XXX */
 
-			resource.valid = false;
-			resource.valid_memory_entries = 0;
-			resource.memory_vmm = nullptr;
+			if (res.memory_vmm) {
+				MessageConsole msg(MessageConsole::TYPE_FREE_VIEW, console_id);
+				msg.view = uint16(2 + res.resource_id); /* XXX */
+				_bus_console.send(msg);
+
+				res.memory_vmm = nullptr;
+			}
+
+			res.valid = false;
+			res.valid_memory_entries = 0;
+
+			if (!_memory_pressure)
+				return;
+
+			bool all_succeeded = true;
+
+			/* retry allocation since guest freed up some memory */
+			for (auto &resource : resources_2d) {
+				if (!resource.valid)
+					continue;
+
+				if (resource.memory_vmm)
+					continue;
+
+				auto const min_size = resource.width * resource.height * 4; /* XXX */
+
+				MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, console_id,
+				                   min_size);
+				msg.view = uint16(2 + resource.resource_id); /* XXX */
+				if (!_bus_console.send(msg)) {
+					all_succeeded = false;
+				} else {
+					Logging::printf("%s: allocation retry succeeded %ux%u %u\n", __func__,
+					                resource.width, resource.height, resource.resource_id);
+
+					resource.memory_vmm = msg.ptr;
+				}
+			}
+
+			if (all_succeeded) {
+				_memory_pressure = false;
+			}
 		}
 
 		void reset_resources()
 		{
-			for (unsigned i = 0; i < sizeof(resources_2d) / sizeof(resources_2d[0]); i++) {
-				if (resources_2d[i].valid)
-					free_resource(resources_2d[i]);
+			for (auto &resource : resources_2d) {
+				if (resource.valid)
+					free_resource(resource);
 			}
 		}
 
 		template <typename FUNC>
 		bool apply_to_resource_2d(uint32 const resource_id, FUNC const &fn)
 		{
-			for (unsigned i = 0; i < sizeof(resources_2d) / sizeof(resources_2d[0]); i++) {
-				if (!resources_2d[i].valid || resources_2d[i].resource_id != resource_id)
+			for (auto &resource : resources_2d) {
+				if (!resource.valid || resource.resource_id != resource_id)
 					continue;
-				fn(resources_2d[i]);
+
+				fn(resource);
 				return true;
 			}
 			return false;
 		}
 
 		template <typename FUNC>
-		void copy_pixels(resource_2d const &resource, unsigned const queue, FUNC const &fn)
+		void copy_pixels(auto const &resource, unsigned const queue, FUNC const &fn)
 		{
 			unsigned const guest_stride = resource.width * 4;
 			unsigned const vmm_stride   = guest_stride;
 
-			if (!resource.memory_vmm) {
-				Logging::printf("copy_pixels: memory_vmm null ?\n");
+			if (!resource.memory_vmm)
 				return;
-			}
 
 			uint64 resource_offset = 0;
 			uint64 x, y = 0;
@@ -312,26 +349,24 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 	public:
 
 		uint16 const console_id { 1 };
-		unsigned mode_width  { };
-		unsigned mode_height { };
-		unsigned mode_width_next  { };
-		unsigned mode_height_next { };
+		struct gpu_rect mode_host { };
+		struct gpu_rect mode_next { };
 		unsigned shape_size { };
 		uint64   host_fb    { };
 		uint64   shape_ptr  { };
-		bool     mode_acked { true };
 
 		Virtio_gpu(DBus<MessageIrqLines>  &bus_irqlines,
 		           DBus<MessageMemRegion> &bus_memregion,
 		           DBus<MessageConsole>   &bus_console,
-		           unsigned char irq, unsigned short bdf)
+		           unsigned char irq, unsigned short bdf, bool verbose)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
-			               16 /* virtio type */,
-			               0x03800001, /* display + GPU + rev 1 */
+			               16            /* virtio type */,
+			               0x03800001,   /* display + GPU + rev 1 */
 			               0xf7a80000ull /* phys bar address XXX */,
-			               2 /* queues */),
-			_bus_console(bus_console)
+			               2             /* queues */),
+			_bus_console(bus_console),
+			_verbose(verbose)
 		{ }
 
 		bool receive(MessagePciConfig &msg) {
@@ -368,18 +403,48 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			}
 		}
 
-		bool receive(MessageConsole &msg)
+		void update_mode_host(unsigned const width, unsigned const height)
+		{
+			MessageConsole msg2(MessageConsole::TYPE_ALLOC_CLIENT, console_id);
+			_bus_console.send(msg2);
+
+			host_fb = uintptr_t(msg2.ptr);
+
+			mode_host.width  = width;
+			mode_host.height = height;
+		}
+
+		bool receive(MessageConsole const &msg)
 		{
 			if (msg.type != MessageConsole::TYPE_MODEINFO_UPDATE ||
 			    msg.id != console_id)
 				return false;
 
-			mode_width_next  = msg.width;
-			mode_height_next = msg.height;
+			/* too small resolutions cause interesting effects - debug hell */
+			if (msg.width < 320 || msg.height < 200)
+				return true;
 
+			mode_next.width  = msg.width;
+			mode_next.height = msg.height;
+
+			/* avoid causing high allocation frequency for small pixel change */
+			bool handle = (int(mode_host.width)  - int(mode_next.width)  >=  16) ||
+			              (int(mode_host.width)  - int(mode_next.width)  <= -16) ||
+			              (int(mode_host.height) - int(mode_next.height) >=  16) ||
+			              (int(mode_host.height) - int(mode_next.height) <= -16);
+
+			if (!handle)
+				return true;
+
+			update_mode_host(mode_next.width, mode_next.height);
+
+			if (_verbose)
+				Logging::printf("virtio gpu %ux%u triggered by host\n",
+				                mode_host.width, mode_host.height);
+
+			/* notify guest */
 			_config.event = VIRTIO_GPU_EVENT;
 
-			/* arm virtio pci */
 			config_changed();
 			inject_irq();
 
@@ -563,25 +628,12 @@ size_t Virtio_gpu::_gpu_display_info(uintptr_t const in,  size_t const in_size,
 		return 0UL;
 	}
 
-	if (mode_width_next && mode_height_next) {
-		if (mode_width_next != mode_width || mode_height_next != mode_height) {
-			MessageConsole msg(MessageConsole::TYPE_ALLOC_CLIENT, console_id);
-			_bus_console.send(msg);
-
-			host_fb = uintptr_t(msg.ptr);
-
-			mode_width  = mode_width_next;
-			mode_height = mode_height_next;
-			mode_acked  = false;
-		}
-	}
-
 	auto &info = *reinterpret_cast<gpu_resp_display_info *>(out);
 	info = { };
 
 	info.header.type = VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
 	info.pmodes[0].r = { .x = 0, .y = 0,
-	                     .width = mode_width, .height = mode_height };
+	                     .width = mode_host.width, .height = mode_host.height };
 	info.pmodes[0].enabled = true;
 
 	return in_size;
@@ -594,61 +646,43 @@ size_t Virtio_gpu::_gpu_create_2d(uintptr_t request,  size_t request_size,
 
 	return check<gpu_resource_create_2d>(request, request_size,
 	                                     response, response_size,
-	                                     name,
-	                                     [&](gpu_resource_create_2d const &create_2d) {
+	                                     name, [&](auto const &res) {
 
-		if (create_2d.format != VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM) {
+		if (res.format != VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM) {
 			Logging::printf("%s: unsupported format %u\n",
-			                name, create_2d.format);
+			                name, res.format);
 			return false;
 		}
 
-		if (create_2d.width > mode_width || create_2d.height > mode_height) {
-			Logging::printf("%s: invalid resolution %ux%u\n",
-			                name, create_2d.width, create_2d.height);
-			return false;
+		MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW, console_id,
+		                   res.width * res.height * 4); /* XXX */
+		msg.view = uint16(2 + res.resource_id); /* XXX */
+
+		if (!_bus_console.send(msg)) {
+			Logging::printf("%s: allocation failed %ux%u id=%u\n", name,
+			                res.width, res.height, res.resource_id);
+			msg.ptr = nullptr;
+			_memory_pressure = true;
 		}
 
-		MessageConsole msg(MessageConsole::TYPE_ALLOC_VIEW,
-		                   console_id,
-		                   create_2d.width * create_2d.height * 4); /* XXX */
-		msg.view = uint16(2 + create_2d.resource_id); /* XXX */
-		_bus_console.send(msg);
-
-		if (!msg.ptr || !create_resource_2d([&](auto &resource){
-			resource.resource_id = create_2d.resource_id;
-			resource.format      = create_2d.format;
-			resource.width       = create_2d.width;
-			resource.height      = create_2d.height;
+		if (!create_resource_2d([&](auto &resource){
+			resource.resource_id = res.resource_id;
+			resource.format      = res.format;
+			resource.width       = res.width;
+			resource.height      = res.height;
 			resource.memory_vmm  = msg.ptr;
 		})) {
 			Logging::printf("%s: too many 2d resources\n", name);
 			return false;
 		}
 
-		/* XXX arrrr could this be better done instead of this heuristic ? */
-		bool changed = !mode_acked &&
-		             ((int(mode_width)  - int(create_2d.width)  <= 8) &&
-		              (int(mode_width)  - int(create_2d.width)  >= -8)) &&
-		             ((int(mode_height) - int(create_2d.height) <= 8) &&
-		              (int(mode_height) - int(create_2d.height) >= -8));
+		if (_verbose)
+			Logging::printf("%s: id=%u %ux%u format=%u (%ux%u %ux%u)\n",
+			                name, res.resource_id, res.width,
+			                res.height, res.format,
+			                mode_host.width, mode_host.height,
+			                mode_next.width, mode_next.height);
 
-		if (changed) {
-			MessageConsole msg(MessageConsole::TYPE_RESOLUTION_CHANGE, console_id);
-			msg.view = 0;
-			msg.x = msg.y = 0;
-			msg.width  = create_2d.width;
-			msg.height = create_2d.height;
-			_bus_console.send(msg);
-
-			mode_acked = true;
-		}
-
-		bool verbose = false;
-		if (verbose)
-			Logging::printf("%s: id=%u %ux%u format=%u\n", name,
-			                create_2d.resource_id, create_2d.width,
-			                create_2d.height, create_2d.format);
 		return true;
 	});
 }
@@ -706,7 +740,7 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 			}
 #endif
 
-			unsigned const vmm_stride   = mode_width * 4;
+			unsigned const vmm_stride   = mode_host.width * 4;
 			unsigned const guest_stride = resource.width * 4;
 
 			if ((flush.r.width  > resource.width)  ||
@@ -731,15 +765,15 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 
 			for (unsigned y = flush.r.y; y < flush.r.y + flush.r.height; y ++) {
 
-				if (y >= mode_height)
+				if (y >= mode_host.height)
 					break;
 
-				if (flush.r.x >= mode_width)
+				if (flush.r.x >= mode_host.width)
 					continue;
 
 				unsigned width_cpy = flush.r.width;
-				if (flush.r.x + width_cpy >= mode_width)
-					width_cpy = mode_width - flush.r.x;
+				if (flush.r.x + width_cpy >= mode_host.width)
+					width_cpy = mode_host.width - flush.r.x;
 
 				memcpy(reinterpret_cast<void *>(host_fb + y * vmm_stride + flush.r.x * 4),
 				       reinterpret_cast<void *>(uintptr_t(resource.memory_vmm) + y * guest_stride + flush.r.x * 4),
@@ -775,15 +809,7 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 	                              response_size, name,
 	                              [&](gpu_set_scanout const &scanout) {
 
-#if 0
-		bool verbose = (scanout.resource_id == 0) ||
-		               scanout.r.width != mode_width ||
-		               scanout.r.height != mode_height;
-#else
-		bool verbose = false;
-#endif
-
-		if (verbose)
+		if (_verbose)
 			Logging::printf("%s: id=%u %ux%x+%ux%u scanout=%u (%s)", name,
 			                scanout.resource_id,
 			                scanout.r.x, scanout.r.y,
@@ -797,6 +823,17 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 			resource.scanout_id    = scanout.scanout_id;
 			resource.scanout_valid = scanout.resource_id != 0;
 		});
+
+		if (scanout.resource_id && scanout.r.width && scanout.r.height)
+		{
+			MessageConsole msg(MessageConsole::TYPE_RESOLUTION_CHANGE, console_id);
+			msg.view   = 0;
+			msg.x      = msg.y = 0;
+			msg.width  = scanout.r.width;
+			msg.height = scanout.r.height;
+
+			_bus_console.send(msg);
+		}
 
 		return true;
 	});
@@ -872,8 +909,8 @@ size_t Virtio_gpu::_gpu_cursor(uintptr_t const in,  size_t const in_size,
 
 		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, console_id);
 		msg.view   = 1;
-		msg.x      = VMM_MIN(cursor.pos.x, mode_width);
-		msg.y      = VMM_MIN(cursor.pos.y, mode_height);
+		msg.x      = VMM_MIN(cursor.pos.x, mode_host.width);
+		msg.y      = VMM_MIN(cursor.pos.y, mode_host.height);
 		msg.width  = resource.width;
 		msg.height = resource.height;
 		msg.hot_x  = cursor.hot_x;
@@ -900,9 +937,7 @@ size_t Virtio_gpu::_gpu_attach_backing(uintptr_t const in,   size_t const in_siz
 
 		unsigned const nr_entries = attach.nr_entries;
 
-		bool verbose = false;
-
-		if (verbose)
+		if (_verbose)
 			Logging::printf("%s: id=%u memory entries=%u\n", name,
 			                attach.resource_id, nr_entries);
 
@@ -955,7 +990,7 @@ size_t Virtio_gpu::_gpu_attach_backing(uintptr_t const in,   size_t const in_siz
 					resource_offset += resource.guest_fb_memory[i].length;
 				}
 
-				if (verbose)
+				if (_verbose)
 					Logging::printf("%s: %u memory descriptors, memory size %llx\n",
 					                name, nr_entries, resource_offset);
 				resource.valid_memory_entries = nr_entries;
@@ -1053,8 +1088,9 @@ size_t Virtio_gpu::_gpu_move_to_host(uintptr_t const in,  size_t const in_size,
 				return true;  /* continue loop */
 			});
 		})) {
-			Logging::printf("%s: unknown 2d resource\n", name);
-			return false;
+			if (_verbose)
+				Logging::printf("%s: unknown 2d resource\n", name);
+			return true;
 		}
 		return true;
 	});
@@ -1065,13 +1101,15 @@ PARAM_HANDLER(virtio_gpu,
 	      "Example: 'virtio_gpu:,13'.",
 	      "If no bdf is given a free one is used.")
 {
+	bool const verbose = false;
+
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_gpu: invalid bdf\n");
 
 	Virtio_gpu *dev = new Virtio_gpu(mb.bus_irqlines, mb.bus_memregion,
 	                                 mb.bus_console, uint8(argv[1]),
-	                                 uint16(bdf));
+	                                 uint16(bdf), verbose);
 
 	mb.bus_pcicfg .add(dev, Virtio_gpu::receive_static<MessagePciConfig>);
 	mb.bus_mem    .add(dev, Virtio_gpu::receive_static<MessageMem>);
@@ -1090,14 +1128,14 @@ PARAM_HANDLER(virtio_gpu,
 	msg.info  = &info;
 	mb.bus_console.send(msg);
 
-	dev->mode_width  = info.resolution[0];
-	dev->mode_height = info.resolution[1];
+	dev->mode_host.width  = info.resolution[0];
+	dev->mode_host.height = info.resolution[1];
 
-	dev->mode_width_next  = info.resolution[0];
-	dev->mode_height_next = info.resolution[1];
+	dev->mode_next.width  = info.resolution[0];
+	dev->mode_next.height = info.resolution[1];
 
-	Logging::printf("virtio gpu host_fb=%llx %ux%u\n",
-	                dev->host_fb, dev->mode_width, dev->mode_height);
+	Logging::printf("virtio gpu %ux%u\n",
+	                dev->mode_host.width, dev->mode_host.height);
 
 	MessageConsole msg2(MessageConsole::TYPE_ALLOC_VIEW, dev->console_id);
 	msg2.view = 1;
