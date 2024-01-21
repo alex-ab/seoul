@@ -142,7 +142,7 @@ private:
     _bufferoffset = 0;
     memset(_buffer, 0xff, 512);
     DmaDescriptor dma = { _baddr, 512};
-    MessageDisk msg(MessageDisk::DISK_READ, _disknr, 0, sector, 1, &dma, 0, ~0ul);
+    MessageDisk msg(MessageDisk::DISK_READ, _disknr, 0, sector, 1, &dma, 0, ~0ul, 0);
     if (!_bus_disk.send(msg)) {
       _status = (_status & static_cast<unsigned char>(~0x80)) | 0x1;
       _error  |= 1<<5; // device fault

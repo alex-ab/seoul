@@ -201,7 +201,8 @@ public:
 
 	      // send a dma_setup_fis
 	      // we reuse the reserved fields to send the PRD count and the slot
-	      unsigned dsf[7] = {0x41, cl[2] + 0x80, 0, clflags >> 16, 0, cl[1], slot+1};
+	      unsigned dsf[7] = { FIS_TYPE_DMA_SETUP, cl[2] + 0x80, 0,
+	                          clflags >> 16, 0, cl[1], slot+1};
 	      _drive->receive_fis(7, dsf);
 
 	      // set BSY

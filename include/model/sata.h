@@ -20,21 +20,26 @@
 
 class FisReceiver
 {
- private:
-  /*
-   * Noncopyable
-   */
-  FisReceiver(FisReceiver const &);
-  FisReceiver &operator = (FisReceiver const &);
+	private:
 
- protected:
-  FisReceiver *_peer;
+		/*
+		 * Noncopyable
+		 */
+		FisReceiver(FisReceiver const &);
+		FisReceiver &operator = (FisReceiver const &);
 
-  ~FisReceiver() {}
+	protected:
 
- public:
-  FisReceiver() : _peer(nullptr) {}
+		enum { FIS_TYPE_DMA_SETUP = 0x41 };
 
-  virtual void receive_fis(size_t fislen, unsigned *fis) = 0;
-  void set_peer(FisReceiver *peer) { _peer = peer; }
+		FisReceiver *_peer;
+
+		~FisReceiver() {}
+
+	public:
+
+		FisReceiver() : _peer(nullptr) {}
+
+		virtual void receive_fis(size_t fislen, unsigned *fis) = 0;
+		void set_peer(FisReceiver *peer) { _peer = peer; }
 };

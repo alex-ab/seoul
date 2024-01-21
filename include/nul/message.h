@@ -693,6 +693,7 @@ struct MessageDisk
       DmaDescriptor *dma;
       unsigned long physoffset;	// TODO: Is this needed now?
       unsigned long physsize;
+      unsigned long more;
     };
   };
   enum Status {
@@ -700,14 +701,16 @@ struct MessageDisk
     DISK_STATUS_BUSY,
     DISK_STATUS_DEVICE,
     DISK_STATUS_DMA,
+    DISK_STATUS_DMA_TOO_LARGE,
     DISK_STATUS_USERTAG,
+    DISK_STATUS_RESUME,
     DISK_STATUS_SHIFT = 4,
     DISK_STATUS_MASK = (1 << DISK_STATUS_SHIFT) -1
   } error;
   MessageDisk(unsigned _disknr, DiskParameter *_params) : type(DISK_GET_PARAMS), disknr(_disknr), params(_params), error(DISK_OK) {}
   MessageDisk(Type _type, unsigned _disknr, unsigned long _usertag, unsigned long long _sector,
-              unsigned _dmacount, DmaDescriptor *_dma, unsigned long _physoffset, unsigned long _physsize)
-    : type(_type), disknr(_disknr), sector(_sector), usertag(_usertag), dmacount(_dmacount), dma(_dma), physoffset(_physoffset), physsize(_physsize), error(DISK_OK) {}
+              unsigned _dmacount, DmaDescriptor *_dma, unsigned long _physoffset, unsigned long _physsize, unsigned long _left)
+    : type(_type), disknr(_disknr), sector(_sector), usertag(_usertag), dmacount(_dmacount), dma(_dma), physoffset(_physoffset), physsize(_physsize), more(_left), error(DISK_OK) {}
 };
 
 
