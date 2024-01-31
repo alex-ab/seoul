@@ -304,6 +304,7 @@ public:
 
 	// make sure we are interruptible
 	msg.cpu->efl |= 0x200;
+	msg.mtr_out |= MTD_RFLAGS;
 	return jmp_int(msg, 0x76);
       }
       msg.cpu->ah = read_bda<unsigned char>(DISK_COMPLETION_CODE);
