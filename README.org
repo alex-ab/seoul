@@ -1,33 +1,62 @@
 * Seoul
 
-Seoul is x86 Virtual Machine Monitor including device modules and
+Seoul is a x86 Virtual Machine Monitor including device models and
 instruction emulator. It is a standalone version of the Vancouver VMM
-that is included in [[https://github.com/TUD-OS/NUL][NUL]] developed mainly by Bernhard Kauer
-(bk@vmmon.org) at the TU Dresden. Please direct questions regarding
-Seoul to Julian Stecklina <jsteckli@os.inf.tu-dresden.de>.
+that is included in [[https://github.com/TUD-OS/NUL][NUL]] and was developed
+mainly by Bernhard Kauer. NUL and the Vancouver project is discontinued.
 
-This repository contains a frontend for Seoul runnable on Linux,
-FreeBSD and perhaps other UNIX-likes implemented in =unix/=. This
-frontend is currently work-in-progress and not intended for anything
-except further development.
+This fork of [[https://github.com/TUD-OS/seoul][Seoul]] is an adjusted version
+specifically tailored to run with the [[https://genode.org][Genode]] operating
+system framework and [[https://genode.org/download/sculpt][Sculpt]] OS.
+Ready to use Seoul packets for Sculpt OS are available via
+[[https://www.genodians.org/alex-ab/2023-05-09-seoul-23-04][alex-ab's]] index.
+Note: the other bindings for NUL and NRE of this repository are not maintained
+nor runnable.
 
-The goal is to keep this UNIX frontend only a showcase for how to get
-Seoul running on your platform. All other parts of Seoul do not invoke
-platform-specific functions on their own and should be reusable on
-most platforms without change.
+Seoul gets mainly maintained and extended by
+[[https://github.com/alex-ab][me]] on a casual base as time permits.
+This repository is referenced as external port of
+[[https://github.com/genodelabs/genode-world][genode-world]], which contains
+the Genode side of the adaptations for this Seoul repository.
 
-This repository also contains drivers developed for NUL in =host=.
+Beside keeping it runnable, the noteworthy extensions are
+the [[https://genode.org/documentation/release-notes/23.11#Seoul_virtual_machine_monitor][64 bit guest support]]
+added in 2023 and the support of
+[[https://genode.org/documentation/release-notes/22.11#Seoul_VMM][Virtio]]
+models for GPU(2D), audio and input in 2021-2022.
+From time to time I [[https://www.genodians.org/alex-ab/index][publish]]
+on [[https://www.genodians.org][genodians.org]] updates.
 
-* Building the UNIX demo
+* Using Seoul with Genode OS framework
 
-The Unix frontend builds with gcc 4.7 on Linux. It builds and runs for
-both 32-bit and 64-bit hosts, although it will only emulate IA-32.  If
-you are ready to give it a go, execute =scons= in =unix/= to start the
-build process. Help regarding build options can be obtained via
- =scons -h=.
+To use it, you first need to obtain a clone of Genode:
 
-We currently only support booting Multiboot compliant kernels. Execute
-=seoul -h= to get usage information.
+! git clone https://github.com/genodelabs/genode.git genode
 
-Serial output is redirected to standard output. VGA is available to
-the VM, but currently not displayed to the user.
+Please follow the instruction of the Genode OS framework to get ready.
+ 
+Now, clone the _genode-world.git_ repository to _genode/repos/world_:
+
+! git clone https://github.com/genodelabs/genode-world.git genode/repos/world
+
+For enabling the repository, adjust the build-directory configuration
+_etc/build.conf_ by adding the following line to the 'REPOSITORIES'
+definitions.
+
+! REPOSITORIES += $(GENODE_DIR)/repos/world
+
+Within the genode directory, create an build directory for x86, e.g.
+
+! tool/create_builddir x86_64
+
+Get the external Seoul port, which is this repository:
+
+! tool/ports/prepare_port seoul
+
+In repos/world/run you will find various seoul*.run scenarios, e.g. an
+example invocation is
+
+! make -C build/x86_64 KERNEL=nova run/seoul-auto
+
+For questions please consult the Genode mailing list or use
+the github issue tracker of this repository.
