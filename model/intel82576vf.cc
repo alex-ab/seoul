@@ -26,6 +26,7 @@
 #include <service/net.h>
 #include <service/endian.h>
 #include <service/memory.h>
+#include <service/lock.h>
 #include <nul/net.h>
 #include <model/pci.h>
 
@@ -69,29 +70,30 @@ private:
   EthernetAddr           _mac;
   DBus<MessageNetwork>  &_net;
 #include "model/simplemem.h"
+  Seoul::Lock            _lock { };
   Clock                 *_clock;
   DBus<MessageTimer>    &_timer;
   unsigned               _timer_nr {0};
   unsigned               _net_id;
 
   // Guest-physical addresses for MMIO and MSI-X regs.
-  uint32 _mem_mmio;
-  uint32 _mem_msix;
+  uint32 const _mem_mmio;
+  uint32 const _mem_msix;
 
   // Two pages of memory holding RX and TX registers.
-  uint32 *_local_rx_regs; // Mapped to _mem_mmio + MAP_OFFSET
-  uint32 *_local_tx_regs; // Mapped to _mem_mmio + MAP_OFFSET + 0x1000
+  uint32 * const _local_rx_regs; // Mapped to _mem_mmio + MAP_OFFSET
+  uint32 * const _local_tx_regs; // Mapped to _mem_mmio + MAP_OFFSET + 0x1000
 
   
   // TX queue polling interval in µs.
-  unsigned _txpoll_us;
+  unsigned const _txpoll_us;
 
   Mta      _mta {};
 
   // Map RX registers?
   unsigned _bdf;
 
-  bool       _map_rx;
+  bool const _map_rx;
   bool const _verbose;
   bool       _host_link_up { };
   const bool _promisc_default;
@@ -433,6 +435,7 @@ private:
 
 	if (!parent->copy_in(uintptr_t(addr), desc.raw, sizeof(desc)))
 	  return;
+
 	if ((desc.raw[1] & (1<<29)) == 0) {
 	  Logging::printf("TX legacy descriptor: Not implemented!\n");
 	} else {
@@ -848,6 +851,8 @@ public:
   {
     if (msg.bdf != _bdf) return false;
 
+	Seoul::Lock::Guard guard(_lock);
+
     switch (msg.type) {
     case MessagePciConfig::TYPE_READ:
       msg.value = PCI_read(msg.dword<<2);
@@ -874,14 +879,24 @@ public:
     return _msix.raw[offset/4] = val & (((offset & 0xF) == 0xC) ? 1 : ~0U);
   }
 
-  // XXX Clean up!
-  bool receive(MessageMem &msg)
-  {
-    // Memory decode disabled?
-    if ((rPCISTSCTRL & 2) == 0) return false;
+	// XXX Clean up!
+	bool receive(MessageMem &msg)
+	{
+		/* PCIBAR0 and PCIBAR3 not under lock - realistic issue ? */
+		bool const bar0_hit = ((msg.phys & ~0x3FFF) == (rPCIBAR0 & ~0x3FFF));
+		bool const bar3_hit = ((msg.phys & ~0x0FFF) == (rPCIBAR3 & ~0x0FFF));
+
+		if (!bar0_hit && !bar3_hit)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
+		// Memory decode disabled?
+		if ((rPCISTSCTRL & 2) == 0)
+			return false;
 
     if (msg.read) {
-      if ((msg.phys & ~0x3FFF) == (rPCIBAR0 & ~0x3FFF)) {
+      if (bar0_hit) {
 	auto const offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
 	//Logging::printf("MMIO READ  %lx\n", offset);
 	switch (offset >> 12) {
@@ -889,13 +904,13 @@ public:
 	case 3:  *msg.ptr = _tx_queues[(offset & 0x100) ? 1 : 0].read(uintptr_t(offset)); break;
 	default: *msg.ptr = MMIO_read(uintptr_t(offset)); break;
 	}
-      } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
+      } else if (bar3_hit) {
 	*msg.ptr = MSIX_read(uintptr_t(msg.phys - (rPCIBAR3 & ~0xFFF)));
       } else return false;
       return true;
     }
 
-    if ((msg.phys & ~0x3FFF) == (rPCIBAR0 & ~0x3FFF)) {
+    if (bar0_hit) {
       auto const offset = msg.phys - (rPCIBAR0 & ~0x3FFF);
       //Logging::printf("MMIO WRITE %lx\n", offset);
       switch (offset >> 12) {
@@ -903,17 +918,28 @@ public:
       case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr, _verbose, _net_id); break;
       default: MMIO_write(uintptr_t(msg.phys - (rPCIBAR0 & ~0x3FFF)), *msg.ptr); break;
       }
-    } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
+    } else if (bar3_hit) {
       MSIX_write(uintptr_t(msg.phys - (rPCIBAR3 & ~0xFFF)), *msg.ptr);
     } else return false;
 
-    return true;
-  }
+		return true;
+	}
 
 	bool receive(MessageNetwork &msg)
 	{
 		if (msg.client != _net_id)
 			return false;
+
+		bool const own_packet =
+			!(((msg.data.buffer < _tx_queues[0].packet_buf) ||
+			   (msg.data.buffer >= (_tx_queues[0].packet_buf + sizeof(_tx_queues[0].packet_buf)))) &&
+			  ((msg.data.buffer < _tx_queues[1].packet_buf) ||
+			   (msg.data.buffer >= (_tx_queues[1].packet_buf + sizeof(_tx_queues[1].packet_buf)))));
+
+		if (own_packet)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
 
 		if (msg.type == MessageNetwork::LINK) {
 			if (_host_link_up != msg.data.link_up) {
@@ -936,70 +962,88 @@ public:
 		if (msg.type != MessageNetwork::PACKET)
 			return false;
 
-		// XXX Hack. Avoid our own packets.
-		if (!(((msg.data.buffer < _tx_queues[0].packet_buf) ||
-		       (msg.data.buffer >= (_tx_queues[0].packet_buf + sizeof(_tx_queues[0].packet_buf)))) &&
-		      ((msg.data.buffer < _tx_queues[1].packet_buf) ||
-		       (msg.data.buffer >= (_tx_queues[1].packet_buf + sizeof(_tx_queues[1].packet_buf))))))
-			return false;
-
 		_rx_queues[0].receive_packet(msg.data.buffer, msg.data.len);
 		return true;
 	}
 
-  void reprogram_timer()
-  {
-    assert(_txpoll_us != 0);
-    MessageTimer msgn(_timer_nr, _clock->abstime(_txpoll_us, 1000000));
-    if (!_timer.send(msgn))
-      Logging::panic("%s could not program timer.", __PRETTY_FUNCTION__);
-  }
+	void reprogram_timer()
+	{
+		assert(_txpoll_us != 0);
+		MessageTimer msgn(_timer_nr, _clock->abstime(_txpoll_us, 1000000));
+		if (!_timer.send(msgn))
+			Logging::panic("%s could not program timer.", __PRETTY_FUNCTION__);
+	}
 
-  bool receive(MessageMemRegion &msg)
-  {
-    switch ((msg.page) - (_mem_mmio >> 12)) {
-    case 0x2:
-      if (!_map_rx) return false;
-      msg.ptr =  reinterpret_cast<char *>(_local_rx_regs);
-      msg.start_page = msg.page;
-      msg.count = 1;
-      break;
-    case 0x3:
-      if (_txpoll_us != 0) {
-	msg.ptr =  reinterpret_cast<char *>(_local_tx_regs);
-	msg.start_page = msg.page;
-	msg.count = 1;
-	// If TX memory is mapped, we need to poll it periodically.
-	reprogram_timer();
+	bool receive(MessageMemRegion &msg)
+	{
+		/* _lock not used, all information are static */
 
-	break;
-      } else {
-	// If _txpoll_us is zero, we don't map TX registers and don't
-	// need to poll.
+		auto const mmio_page = _mem_mmio >> 12;
+		if (msg.page < mmio_page)
+			return false;
 
-	[[fallthrough]];
-      }
-    default:
-      return false;
-    }
+		auto const offset = msg.page - mmio_page;
+		if (offset != 2 && offset != 3)
+			return false;
 
-    if (_verbose)
-      Logging::printf("82576VF MAP %lx+%lx from %p\n", msg.page, msg.count, msg.ptr);
-    return true;
-  }
+		switch (offset) {
+		case 0x2:
+			if (!_map_rx)
+				return false;
 
-  bool receive(MessageTimeout &msg)
-  {
-    if (msg.nr != _timer_nr) return false;
+			msg.ptr        = reinterpret_cast<char *>(_local_rx_regs);
+			msg.start_page = msg.page;
+			msg.count      = 1;
 
-    for (unsigned i = 0; i < 2; i++) {
-      _tx_queues[i].txdctl_poll(_verbose);
-      _tx_queues[i].tdt_poll(_net_id);
-    }
+			break;
 
-    reprogram_timer();
-    return true;
-  }
+		case 0x3:
+
+			if (_txpoll_us != 0) {
+				msg.ptr =  reinterpret_cast<char *>(_local_tx_regs);
+				msg.start_page = msg.page;
+				msg.count = 1;
+
+				// If TX memory is mapped, we need to poll it periodically.
+				reprogram_timer();
+
+				break;
+			} else {
+				// If _txpoll_us is zero, we don't map TX registers and don't
+				// need to poll.
+
+				return false;
+			}
+
+		default:
+			return false;
+		}
+
+		if (_verbose)
+			Logging::printf("82576VF MAP %lx+%lx from %p\n",
+			                msg.page, msg.count, msg.ptr);
+
+		return true;
+	}
+
+	bool receive(MessageTimeout &msg)
+	{
+		if (msg.nr != _timer_nr)
+			return false;
+
+		{
+			Seoul::Lock::Guard guard(_lock);
+
+			for (unsigned i = 0; i < 2; i++) {
+				_tx_queues[i].txdctl_poll(_verbose);
+				_tx_queues[i].tdt_poll(_net_id);
+			}
+		}
+
+		reprogram_timer();
+
+		return true;
+	}
 
 	enum { LU  = 1u << 1, SLU = 1u << 6 };
 
@@ -1035,69 +1079,15 @@ public:
     }
   }
 
-  bool receive(MessageLegacy &msg)
-  {
-    if (msg.type == MessageLegacy::RESET)
-      device_reset();
+	bool receive(MessageLegacy &msg)
+	{
+		if (msg.type == MessageLegacy::RESET) {
+			Seoul::Lock::Guard guard(_lock);
+			device_reset();
+		}
 
-    return false;
-  }
-
-  bool receive(MessageRestore &msg)
-  {
-      const mword bytes = reinterpret_cast<mword>(&processed)
-          -reinterpret_cast<mword>(&_mac);
-
-      if (msg.devtype == MessageRestore::RESTORE_RESTART) {
-          processed = false;
-          msg.bytes += bytes + 2 * 0x1000 + sizeof(msg);
-          return false;
-      }
-
-      if (msg.devtype != MessageRestore::RESTORE_NIC || processed) return false;
-
-      if (msg.write) {
-          msg.bytes = bytes + 2 * 0x1000;
-          memcpy(msg.space, reinterpret_cast<void*>(&_mac), bytes);
-          memcpy(msg.space + bytes, _local_rx_regs, 0x1000);
-          memcpy(msg.space + bytes + 0x1000, _local_tx_regs, 0x1000);
-      }
-      else {
-          uint32 *local_rx_regs = _local_rx_regs;
-          uint32 *local_tx_regs = _local_tx_regs;
-          Clock  *clock = _clock;
-
-          memcpy(reinterpret_cast<void*>(&_mac), msg.space, bytes);
-
-          _local_rx_regs = local_rx_regs;
-          _local_tx_regs = local_tx_regs;
-          _clock = clock;
-
-          memcpy(_local_rx_regs, msg.space + bytes, 0x1000);
-          memcpy(_local_tx_regs, msg.space + bytes + 0x1000, 0x1000);
-
-          _rx_queues[0].parent = this;
-          _rx_queues[0].regs = local_rx_regs;
-          _rx_queues[1].parent = this;
-          _rx_queues[1].regs = local_rx_regs + 0x100/4;
-          _tx_queues[0].parent = this;
-          _tx_queues[0].regs = local_tx_regs;
-          _tx_queues[1].parent = this;
-          _tx_queues[1].regs = local_tx_regs + 0x100/4;
-
-          if (_ip_address) {
-              Logging::printf("Trying to claim: MAC " MAC_FMT " IP %x\n",
-                      MAC_SPLIT((&_guest_uses_mac)), _ip_address);
-              for (int i=0; i < 3; ++i)
-                  arp_gratuitous(EthernetAddr(0xffffffffffffull), true);
-          }
-      }
-
-      Logging::printf("%s NIC\n", msg.write?"Saved":"Restored");
-      processed = true;
-      return true;
-  }
-
+		return false;
+	}
 
   Model82576vf(uint64 mac, DBus<MessageNetwork> &net,
 	       DBus<MessageMem> *bus_mem, DBus<MessageMemRegion> *bus_memregion,
@@ -1151,11 +1141,13 @@ PARAM_HANDLER(intel82576vf,
 	if (!mb.bus_hostop.send(msg))
 		Logging::panic("Could not get a MAC address");
 
-  uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : unsigned(argv[1]);
+	uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : unsigned(argv[1]);
 
-  MessageHostOp msg_mmio(MessageHostOp::OP_ALLOC_IOMEM, mem_mmio + MAP_OFFSET, 2*0x1000);
-  if (!mb.bus_hostop.send(msg_mmio) || !msg_mmio.ptr)
-    Logging::panic("can not allocate IOMEM region %lx+%zx", msg_mmio.value, msg_mmio.len);
+	MessageHostOp msg_mmio(MessageHostOp::OP_ALLOC_IOMEM,
+	                       mem_mmio + MAP_OFFSET, 2 * 0x1000);
+
+	if (!mb.bus_hostop.send(msg_mmio) || !msg_mmio.ptr)
+		Logging::panic("82576vf: can not allocate IOMEM region");
 
 	auto *dev = new Model82576vf(hton64(msg.mac) >> 16,
 				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
@@ -1169,15 +1161,10 @@ PARAM_HANDLER(intel82576vf,
 				       (argv[5] == ~0UL) ? false : (argv[5] != 0UL),
 				       id);
 
-  mb.bus_mem.add(dev, &Model82576vf::receive_static<MessageMem>);
-  mb.bus_memregion.add(dev, &Model82576vf::receive_static<MessageMemRegion>);
-  mb.bus_pcicfg.  add(dev, &Model82576vf::receive_static<MessagePciConfig>);
-  mb.bus_network. add(dev, &Model82576vf::receive_static<MessageNetwork>);
-  mb.bus_timeout. add(dev, &Model82576vf::receive_static<MessageTimeout>);
-  mb.bus_legacy.  add(dev, &Model82576vf::receive_static<MessageLegacy>);
-  mb.bus_restore. add(dev, &Model82576vf::receive_static<MessageRestore>);
+	mb.bus_mem      .add(dev, &Model82576vf::receive_static<MessageMem>);
+	mb.bus_memregion.add(dev, &Model82576vf::receive_static<MessageMemRegion>);
+	mb.bus_pcicfg   .add(dev, &Model82576vf::receive_static<MessagePciConfig>);
+	mb.bus_network  .add(dev, &Model82576vf::receive_static<MessageNetwork>);
+	mb.bus_timeout  .add(dev, &Model82576vf::receive_static<MessageTimeout>);
+	mb.bus_legacy   .add(dev, &Model82576vf::receive_static<MessageLegacy>);
 }
-
-
-
-// EOF
