@@ -803,25 +803,27 @@ struct MessageTime
 
 struct MessageNetwork
 {
-  enum ops {
-    PACKET,
-    QUERY_MAC
-  };
+	enum ops {
+		PACKET,
+		QUERY_MAC,
+		LINK
+	} const type;
 
-  unsigned type;
+	struct data {
+		union {
+			struct {
+				void * buffer;
+				size_t len;
+			};
+			unsigned long long mac;
+			struct { bool link_up; };
+		};
+	} const data;
 
-  union {
-    struct {
-      const unsigned char *buffer;
-      size_t len;
-    };
-    unsigned long long mac;
-  };
+	unsigned client;
 
-  unsigned client;
-
-  MessageNetwork(const unsigned char *buffer, size_t len, unsigned client) : type(PACKET), buffer(buffer), len(len), client(client) {}
-  MessageNetwork(unsigned type, unsigned client) : type(type), mac(0), client(client) { }
+	MessageNetwork(enum ops type, struct data const data, unsigned client)
+	: type(type), data(data), client(client) { }
 };
 
 struct MessageRestore

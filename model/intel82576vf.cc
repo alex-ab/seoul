@@ -72,6 +72,7 @@ private:
   Clock                 *_clock;
   DBus<MessageTimer>    &_timer;
   unsigned               _timer_nr {0};
+  unsigned               _net_id;
 
   // Guest-physical addresses for MMIO and MSI-X regs.
   uint32 _mem_mmio;
@@ -85,16 +86,16 @@ private:
   // TX queue polling interval in µs.
   unsigned _txpoll_us;
 
+  Mta      _mta {};
+
   // Map RX registers?
   unsigned _bdf;
-  bool _map_rx;
 
+  bool       _map_rx;
   bool const _verbose;
-
-  // Filtering
+  bool       _host_link_up { };
   const bool _promisc_default;
   bool       _promisc { _promisc_default };
-  Mta        _mta {};
 
 #include <model/intel82576vfmmio.inc>
 #include <model/intel82576vfpci.inc>
@@ -174,7 +175,8 @@ private:
     }
 
     void apply_segmentation(uint8 * const packet, uint32 const packet_len,
-                            tx_desc const &desc, bool const tse)
+                            tx_desc const &desc, bool const tse,
+                            unsigned const net_id)
     {
       uint32 const payload_len = desc.paylen();
 
@@ -186,8 +188,10 @@ private:
         }
         apply_offload(packet, payload_len, desc);
 
-        MessageNetwork m(packet, packet_len, 0);
-        parent->_net.send(m);
+        MessageNetwork msg(MessageNetwork::PACKET,
+                           { .buffer = packet, .len = packet_len },
+                           net_id);
+        parent->_net.send(msg);
         return;
       }
 
@@ -250,8 +254,11 @@ private:
         // need to fix checksums and off it goes...
         uint32 segment_len = header_len + chunk_size;
         apply_offload(packet, segment_len, desc);
-        MessageNetwork m(packet, segment_len, 0);
-        parent->_net.send(m);
+
+        MessageNetwork msg(MessageNetwork::PACKET,
+                           { .buffer = packet, .len = segment_len },
+                           net_id);
+        parent->_net.send(msg);
 
         // Prepare next chunk
         data_sent += chunk_size;
@@ -355,7 +362,7 @@ private:
       }
     }
 
-    void handle_dta(uint64 addr, tx_desc &desc)
+    void handle_dta(uint64 addr, tx_desc &desc, unsigned const net_id)
     {
       uint32 data_len = desc.dtalen();
       uint8  dcmd = desc.dcmd();
@@ -390,7 +397,8 @@ private:
       packet_cur += data_len;
 
       if (dcmd & EOP) {
-        apply_segmentation(packet_buf, packet_cur, desc, (dcmd & TSE) != 0);
+        apply_segmentation(packet_buf, packet_cur, desc, (dcmd & TSE) != 0,
+                           net_id);
         packet_cur = 0;
       }
 
@@ -402,7 +410,7 @@ private:
         parent->TX_irq(n);
     }
 
-    void tdt_poll()
+    void tdt_poll(unsigned const net_id)
     {
       if ((regs[TXDCTL] & (1<<25)) == 0) {
 	//if (n == 0) Logging::printf("TX: Queue %u not enabled.\n", n);
@@ -431,7 +439,7 @@ private:
 	  uint8 dtyp = (desc.raw[1] >> 20) & 0xF;
 	  switch (dtyp) {
 	  case 2: handle_ctx(addr, desc); break;
-	  case 3: handle_dta(addr, desc); break;
+	  case 3: handle_dta(addr, desc, net_id); break;
 	  default:
 	    Logging::printf("TX unknown descriptor?\n");
 	  }
@@ -449,13 +457,13 @@ private:
       return regs[(offset & 0x8FF)/4];
     }
 
-    void write(uintptr_t offset, uint32 val, bool const verbose)
+    void write(uintptr_t offset, uint32 val, bool const verbose, unsigned const net_id)
     {
       // Logging::printf("TX write %x (%x) <- %x\n", offset, (offset & 0x8FF) / 4, val);
       auto const i = (offset & 0x8FF) / 4;
       regs[i] = val;
       if (i == TXDCTL) txdctl_poll(verbose);
-      if (i == TDT) tdt_poll();
+      if (i == TDT) tdt_poll(net_id);
       
     }
 
@@ -531,7 +539,7 @@ private:
       rxdctl_old = rxdctl_new;
     }
 
-    void receive_packet(uint8 *buf, size_t size)
+    void receive_packet(void * buf, size_t size)
     {
       // Check early if this packet is for us.
 
@@ -674,8 +682,10 @@ private:
       const arp_packet arp(_guest_uses_mac, addr, _ip_address,
               request ? 0x100 /* ARP_REQUEST */ : 0x200 /* ARP_REPLY */);
 
-      MessageNetwork m(reinterpret_cast<const unsigned char*>(&arp), sizeof(arp), 0);
-      _net.send(m);
+      MessageNetwork msg(MessageNetwork::PACKET,
+                         { .buffer = (void *)&arp, .len = sizeof(arp) },
+                         _net_id);
+      _net.send(msg);
   }
 
   uint32 VTFRTIMER_compute()
@@ -817,10 +827,11 @@ private:
     rVMMB &= ~3;
   }
 
-  void VTCTRL_cb(uint32 old, uint32 val)
+  void VTCTRL_cb(uint32 const old, uint32 const val)
   {
     if ((old ^ val) & (1<<26 /* Reset */)) {
       MMIO_init();
+      update_link_status();
       // XXX Anything else to do here?
     }
   }
@@ -889,27 +900,52 @@ public:
       //Logging::printf("MMIO WRITE %lx\n", offset);
       switch (offset >> 12) {
       case 2: _rx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr); break;
-      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr, _verbose); break;
+      case 3: _tx_queues[(offset & 0x100) ? 1 : 0].write(uintptr_t(offset), *msg.ptr, _verbose, _net_id); break;
       default: MMIO_write(uintptr_t(msg.phys - (rPCIBAR0 & ~0x3FFF)), *msg.ptr); break;
       }
     } else if ((msg.phys & ~0xFFF) == (rPCIBAR3 & ~0xFFF)) {
       MSIX_write(uintptr_t(msg.phys - (rPCIBAR3 & ~0xFFF)), *msg.ptr);
     } else return false;
+
     return true;
   }
 
-  bool receive(MessageNetwork &msg)
-  {
-    // XXX Hack. Avoid our own packets.
-    if (!(((msg.buffer < _tx_queues[0].packet_buf) ||
-	   (msg.buffer >= (_tx_queues[0].packet_buf + sizeof(_tx_queues[0].packet_buf)))) &&
-	  ((msg.buffer < _tx_queues[1].packet_buf) ||
-	   (msg.buffer >= (_tx_queues[1].packet_buf + sizeof(_tx_queues[1].packet_buf))))))
-      return false;
+	bool receive(MessageNetwork &msg)
+	{
+		if (msg.client != _net_id)
+			return false;
 
-    _rx_queues[0].receive_packet(const_cast<uint8 *>(msg.buffer), msg.len);
-    return true;
-  }
+		if (msg.type == MessageNetwork::LINK) {
+			if (_host_link_up != msg.data.link_up) {
+				_host_link_up = msg.data.link_up;
+
+				update_link_status();
+
+				Logging::printf("82576vf %u: link state %s %s\n",
+				                _net_id,
+				                (rSTATUS & LU)  ? "UP"  : "DOWN",
+				                (rVTCTRL & SLU) ? "SLU" : ""
+				               );
+
+				MISC_irq();
+			}
+
+			return true;
+		}
+
+		if (msg.type != MessageNetwork::PACKET)
+			return false;
+
+		// XXX Hack. Avoid our own packets.
+		if (!(((msg.data.buffer < _tx_queues[0].packet_buf) ||
+		       (msg.data.buffer >= (_tx_queues[0].packet_buf + sizeof(_tx_queues[0].packet_buf)))) &&
+		      ((msg.data.buffer < _tx_queues[1].packet_buf) ||
+		       (msg.data.buffer >= (_tx_queues[1].packet_buf + sizeof(_tx_queues[1].packet_buf))))))
+			return false;
+
+		_rx_queues[0].receive_packet(msg.data.buffer, msg.data.len);
+		return true;
+	}
 
   void reprogram_timer()
   {
@@ -958,12 +994,22 @@ public:
 
     for (unsigned i = 0; i < 2; i++) {
       _tx_queues[i].txdctl_poll(_verbose);
-      _tx_queues[i].tdt_poll();
+      _tx_queues[i].tdt_poll(_net_id);
     }
 
     reprogram_timer();
     return true;
   }
+
+	enum { LU  = 1u << 1, SLU = 1u << 6 };
+
+	void update_link_status()
+	{
+		rSTATUS = (rSTATUS & ~LU) | (_host_link_up ? LU : 0);
+		if (_host_link_up && !(rVTCTRL & SLU))
+			rVTCTRL |= SLU;
+
+	}
 
   void device_reset()
   {
@@ -978,6 +1024,7 @@ public:
     }
 
     MMIO_init();
+    update_link_status();
 
     _mta.clear();
     _promisc = _promisc_default;
@@ -1058,9 +1105,10 @@ public:
 	       uint32 mem_mmio, uint32 * local_rx_regs,
 	       uint32 mem_msix,
 	       unsigned txpoll_us, bool map_rx, unsigned bdf,
-	       bool promisc_default, bool verbose)
+	       bool promisc_default, bool verbose, unsigned net_id)
     : _mac(mac), _net(net), _bus_memregion(bus_memregion), _bus_mem(bus_mem),
       _clock(clock), _timer(timer),
+      _net_id(net_id),
       _mem_mmio(mem_mmio), _mem_msix(mem_msix),
       _local_rx_regs(local_rx_regs), _local_tx_regs(_local_rx_regs + 1024),
       _txpoll_us(txpoll_us), _bdf(bdf), _map_rx(map_rx),
@@ -1097,8 +1145,11 @@ PARAM_HANDLER(intel82576vf,
 	      "Example: intel82576vf"
 	      )
 {
-  MessageHostOp msg(MessageHostOp::OP_GET_MAC, 0UL);
-  if (!mb.bus_hostop.send(msg)) Logging::panic("Could not get a MAC address");
+	auto const id = NicID::generate_new_id();
+
+	MessageHostOp msg(MessageHostOp::OP_GET_MAC, id);
+	if (!mb.bus_hostop.send(msg))
+		Logging::panic("Could not get a MAC address");
 
   uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : unsigned(argv[1]);
 
@@ -1106,7 +1157,7 @@ PARAM_HANDLER(intel82576vf,
   if (!mb.bus_hostop.send(msg_mmio) || !msg_mmio.ptr)
     Logging::panic("can not allocate IOMEM region %lx+%zx", msg_mmio.value, msg_mmio.len);
 
-  Model82576vf *dev = new Model82576vf(hton64(msg.mac) >> 16,
+	auto *dev = new Model82576vf(hton64(msg.mac) >> 16,
 				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
 				       mb.clock(), mb.bus_timer,
 				       mem_mmio, reinterpret_cast<uint32 *>(msg_mmio.ptr),
@@ -1115,7 +1166,9 @@ PARAM_HANDLER(intel82576vf,
 				       argv[4],
 				       PciHelper::find_free_bdf(mb.bus_pcicfg, ~0U),
 				       (argv[0] == ~0UL) ? true  : (argv[0] != 0UL),
-				       (argv[5] == ~0UL) ? false : (argv[5] != 0UL));
+				       (argv[5] == ~0UL) ? false : (argv[5] != 0UL),
+				       id);
+
   mb.bus_mem.add(dev, &Model82576vf::receive_static<MessageMem>);
   mb.bus_memregion.add(dev, &Model82576vf::receive_static<MessageMemRegion>);
   mb.bus_pcicfg.  add(dev, &Model82576vf::receive_static<MessagePciConfig>);

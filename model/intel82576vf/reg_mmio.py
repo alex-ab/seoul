@@ -7,7 +7,7 @@ rset = [
     { 'name' : 'rVTCTRL', 'offset'  : 0x0, 'initial' : 0,
       'callback' : 'VTCTRL_cb' },
     # Normal R/O register
-    { 'name' : 'rSTATUS', 'offset'  : 0x8, 'initial' : int('10000011',2), # 1GB/s, UP, FD
+    { 'name' : 'rSTATUS', 'offset'  : 0x8, 'initial' : int('10000001',2), # 1GB/s, DOWN, FD
       'read-only' : True },
     # Free Running Timer
     { 'name' : 'rVTFRTIMER',

@@ -18,6 +18,7 @@
 
 #include "nul/motherboard.h"
 #include "model/pci.h"
+#include "service/net.h"
 
 /**
  * RTL8029 device model.
@@ -29,11 +30,13 @@
 #ifndef VMM_REGBASE
 class Rtl8029: public StaticReceiver<Rtl8029>
 {
-  DBus<MessageNetwork>  &_bus_network;
-  DBus<MessageIrqLines> &_bus_irqlines;
-  unsigned char _irq;
-  unsigned long long _mac;
-  unsigned _bdf;
+	DBus<MessageNetwork>  &_bus_network;
+	DBus<MessageIrqLines> &_bus_irqlines;
+	unsigned char      const _irq;
+	unsigned long long const _mac;
+	unsigned           const _bdf;
+	unsigned           const _net_id;
+
   struct {
     unsigned char  cr;
     unsigned short clda;
@@ -80,24 +83,25 @@ class Rtl8029: public StaticReceiver<Rtl8029>
   }
 
 
-  void send_packet()
-  {
-    COUNTER_INC("SEND packet");
-    // check for buffer overflows or short packets
-    if (((_regs.tpsr << 8) + _regs.tbcr) < static_cast<int>(sizeof(_mem)) && _regs.tbcr >= 8u)
-      {
-	MessageNetwork msg2(_mem + (_regs.tpsr << 8), _regs.tbcr, 0);
-	_bus_network.send(msg2);
-	_regs.tsr = 0x1;
-	update_isr(0x2);
-      }
-    else
-      {
-	// transmit error
-	_regs.tsr = 0x20;
-	update_isr(0x10);
-      }
-    _regs.cr &= uint8(~4u);
+	void send_packet()
+	{
+		COUNTER_INC("SEND packet");
+		// check for buffer overflows or short packets
+		if (((_regs.tpsr << 8) + _regs.tbcr) < static_cast<int>(sizeof(_mem)) && _regs.tbcr >= 8u)
+		{
+			MessageNetwork msg2(MessageNetwork::PACKET,
+			                    { .buffer = _mem + (_regs.tpsr << 8), .len = _regs.tbcr },
+			                    _net_id);
+			_bus_network.send(msg2);
+			_regs.tsr = 0x1;
+			update_isr(0x2);
+		} else {
+			// transmit error
+			_regs.tsr = 0x20;
+			update_isr(0x10);
+		}
+
+		_regs.cr &= uint8(~4u);
   }
 
   bool not_accept(const unsigned char *buffer, size_t const len)
@@ -273,11 +277,15 @@ class Rtl8029: public StaticReceiver<Rtl8029>
   }
 
 public:
-  bool  receive(MessageNetwork &msg)
-  {
-    if (msg.buffer >= _mem && msg.buffer < _mem + sizeof(_mem)) return false;
-    return receive_packet(msg.buffer, msg.len);
-  }
+
+	bool  receive(MessageNetwork &msg)
+	{
+		if (msg.type != MessageNetwork::PACKET || msg.client != _net_id)
+			return false;
+
+		if (msg.data.buffer >= _mem && msg.data.buffer < _mem + sizeof(_mem)) return false;
+			return receive_packet(reinterpret_cast<uint8 const *>(msg.data.buffer), msg.data.len);
+	}
 
   bool receive(MessageIOIn &msg)
   {
@@ -307,17 +315,24 @@ public:
   bool receive(MessagePciConfig &msg)  {  return PciHelper::receive(msg, this, _bdf); }
 
 
-  Rtl8029(DBus<MessageNetwork> &bus_network, DBus<MessageIrqLines> &bus_irqlines, unsigned char irq, unsigned long long mac, unsigned bdf) :
-    _bus_network(bus_network), _bus_irqlines(bus_irqlines),  _irq(irq), _mac(mac), _bdf(bdf)
+	Rtl8029(DBus<MessageNetwork>  &bus_network,
+	        DBus<MessageIrqLines> &bus_irqlines,
+	        unsigned char irq,
+	        unsigned long long mac,
+	        unsigned bdf,
+	        unsigned net_id)
+	:
+		_bus_network(bus_network), _bus_irqlines(bus_irqlines),
+		_irq(irq), _mac(mac), _bdf(bdf), _net_id(net_id)
   {
     PCI_reset();
 
     // init memory
     memset(_mem, 0x00, sizeof(_mem));
-    for (unsigned i=0; i< 6; i++)  _mem[i] = reinterpret_cast<unsigned char *>(&_mac)[5 - i];
+    for (unsigned i=0; i< 6; i++)  _mem[i] = reinterpret_cast<unsigned char const *>(&_mac)[5 - i];
     memcpy(_mem + 0xe, "WW", 2);
 
-    for (unsigned i=0; i< 6; i++)  _mem[i + 0x10] = reinterpret_cast<unsigned char *>(&_mac)[5 - i];
+    for (unsigned i=0; i< 6; i++)  _mem[i + 0x10] = reinterpret_cast<unsigned char const *>(&_mac)[5 - i];
     memcpy(_mem + 0x1e, "BB", 2);
 
     for (unsigned i=1; i<8; i++) memcpy(_mem + 0x20*i, _mem, 0x20);
@@ -334,13 +349,20 @@ PARAM_HANDLER(rtl8029,
 	      "Example: 'rtl8029:,9,0x300'.",
 	      "If no bdf is given a free one is used.")
 {
-  MessageHostOp msg(MessageHostOp::OP_GET_MAC, 0UL);
-  if (!mb.bus_hostop.send(msg))  Logging::panic("Could not get a MAC address");
-  Rtl8029 *dev = new Rtl8029(mb.bus_network, mb.bus_irqlines, uint8(argv[1]), msg.mac, PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0])));
-  mb.bus_pcicfg.add (dev, Rtl8029::receive_static<MessagePciConfig>);
-  mb.bus_ioin.add   (dev, Rtl8029::receive_static<MessageIOIn>);
-  mb.bus_ioout.add  (dev, Rtl8029::receive_static<MessageIOOut>);
-  mb.bus_network.add(dev, Rtl8029::receive_static<MessageNetwork>);
+	auto const id = NicID::generate_new_id();
+
+	MessageHostOp msg(MessageHostOp::OP_GET_MAC, id);
+	if (!mb.bus_hostop.send(msg))
+		Logging::panic("rtl8029: could not get a MAC address");
+
+	auto dev = new Rtl8029(mb.bus_network, mb.bus_irqlines, uint8(argv[1]),
+	                       msg.mac, PciHelper::find_free_bdf(mb.bus_pcicfg,
+	                       unsigned(argv[0])), id);
+
+	mb.bus_pcicfg.add (dev, Rtl8029::receive_static<MessagePciConfig>);
+	mb.bus_ioin.add   (dev, Rtl8029::receive_static<MessageIOIn>);
+	mb.bus_ioout.add  (dev, Rtl8029::receive_static<MessageIOOut>);
+	mb.bus_network.add(dev, Rtl8029::receive_static<MessageNetwork>);
 
 
   // set IO region and IRQ

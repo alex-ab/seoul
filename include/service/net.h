@@ -383,4 +383,16 @@ public:
   IPChecksumState() : _state(0), _odd(false) {}
 };
 
+class NicID
+{
+	private:
+
+		static unsigned id;
+
+	public:
+
+		static unsigned generate_new_id() {
+			return __atomic_add_fetch(&id, 1, __ATOMIC_RELAXED); }
+};
+
 // EOF
