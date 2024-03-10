@@ -804,7 +804,8 @@ struct MessageTime
 struct MessageNetwork
 {
 	enum ops {
-		PACKET,
+		PACKET_TO_MODEL,
+		PACKET_TO_HOST,
 		QUERY_MAC,
 		LINK
 	} const type;

@@ -89,7 +89,7 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 		// check for buffer overflows or short packets
 		if (((_regs.tpsr << 8) + _regs.tbcr) < static_cast<int>(sizeof(_mem)) && _regs.tbcr >= 8u)
 		{
-			MessageNetwork msg2(MessageNetwork::PACKET,
+			MessageNetwork msg2(MessageNetwork::PACKET_TO_HOST,
 			                    { .buffer = _mem + (_regs.tpsr << 8), .len = _regs.tbcr },
 			                    _net_id, false);
 			_bus_network.send(msg2);
@@ -278,13 +278,12 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 
 public:
 
-	bool  receive(MessageNetwork &msg)
+	bool receive(MessageNetwork &msg)
 	{
-		if (msg.type != MessageNetwork::PACKET || msg.client != _net_id)
+		if (msg.type != MessageNetwork::PACKET_TO_MODEL || msg.client != _net_id)
 			return false;
 
-		if (msg.data.buffer >= _mem && msg.data.buffer < _mem + sizeof(_mem)) return false;
-			return receive_packet(reinterpret_cast<uint8 const *>(msg.data.buffer), msg.data.len);
+		return receive_packet(reinterpret_cast<uint8 const *>(msg.data.buffer), msg.data.len);
 	}
 
   bool receive(MessageIOIn &msg)

@@ -190,7 +190,7 @@ private:
         }
         apply_offload(packet, payload_len, desc);
 
-        MessageNetwork msg(MessageNetwork::PACKET,
+        MessageNetwork msg(MessageNetwork::PACKET_TO_HOST,
                            { .buffer = packet, .len = packet_len },
                            net_id, false);
         parent->_net.send(msg);
@@ -257,7 +257,7 @@ private:
         uint32 segment_len = header_len + chunk_size;
         apply_offload(packet, segment_len, desc);
 
-        MessageNetwork msg(MessageNetwork::PACKET,
+        MessageNetwork msg(MessageNetwork::PACKET_TO_HOST,
                            { .buffer = packet, .len = segment_len },
                            net_id, !!data_left);
         parent->_net.send(msg);
@@ -685,7 +685,7 @@ private:
       const arp_packet arp(_guest_uses_mac, addr, _ip_address,
               request ? 0x100 /* ARP_REQUEST */ : 0x200 /* ARP_REPLY */);
 
-      MessageNetwork msg(MessageNetwork::PACKET,
+      MessageNetwork msg(MessageNetwork::PACKET_TO_HOST,
                          { .buffer = (void *)&arp, .len = sizeof(arp) },
                          _net_id, false);
       _net.send(msg);
@@ -930,13 +930,8 @@ public:
 		if (msg.client != _net_id)
 			return false;
 
-		bool const own_packet =
-			!(((msg.data.buffer < _tx_queues[0].packet_buf) ||
-			   (msg.data.buffer >= (_tx_queues[0].packet_buf + sizeof(_tx_queues[0].packet_buf)))) &&
-			  ((msg.data.buffer < _tx_queues[1].packet_buf) ||
-			   (msg.data.buffer >= (_tx_queues[1].packet_buf + sizeof(_tx_queues[1].packet_buf)))));
-
-		if (own_packet)
+		if (msg.type != MessageNetwork::LINK &&
+		    msg.type != MessageNetwork::PACKET_TO_MODEL)
 			return false;
 
 		Seoul::Lock::Guard guard(_lock);
@@ -959,7 +954,7 @@ public:
 			return true;
 		}
 
-		if (msg.type != MessageNetwork::PACKET)
+		if (msg.type != MessageNetwork::PACKET_TO_MODEL)
 			return false;
 
 		_rx_queues[0].receive_packet(msg.data.buffer, msg.data.len);
