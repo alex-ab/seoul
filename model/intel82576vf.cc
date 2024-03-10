@@ -192,7 +192,7 @@ private:
 
         MessageNetwork msg(MessageNetwork::PACKET,
                            { .buffer = packet, .len = packet_len },
-                           net_id);
+                           net_id, false);
         parent->_net.send(msg);
         return;
       }
@@ -259,7 +259,7 @@ private:
 
         MessageNetwork msg(MessageNetwork::PACKET,
                            { .buffer = packet, .len = segment_len },
-                           net_id);
+                           net_id, !!data_left);
         parent->_net.send(msg);
 
         // Prepare next chunk
@@ -687,7 +687,7 @@ private:
 
       MessageNetwork msg(MessageNetwork::PACKET,
                          { .buffer = (void *)&arp, .len = sizeof(arp) },
-                         _net_id);
+                         _net_id, false);
       _net.send(msg);
   }
 

@@ -821,9 +821,10 @@ struct MessageNetwork
 	} const data;
 
 	unsigned client;
+	bool     more;
 
-	MessageNetwork(enum ops type, struct data const data, unsigned client)
-	: type(type), data(data), client(client) { }
+	MessageNetwork(enum ops type, struct data const data, unsigned client, bool more)
+	: type(type), data(data), client(client), more(more) { }
 };
 
 struct MessageRestore
