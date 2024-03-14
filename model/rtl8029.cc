@@ -19,6 +19,7 @@
 #include "nul/motherboard.h"
 #include "model/pci.h"
 #include "service/net.h"
+#include "service/lock.h"
 
 /**
  * RTL8029 device model.
@@ -36,6 +37,8 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 	unsigned long long const _mac;
 	unsigned           const _bdf;
 	unsigned           const _net_id;
+
+	Seoul::Lock              _lock { };
 
   struct {
     unsigned char  cr;
@@ -72,16 +75,14 @@ class Rtl8029: public StaticReceiver<Rtl8029>
 #include "model/reg.h"
 
 
-  void update_isr(uint8 const value)
-  {
-    _regs.isr |= value;
-    if (_regs.isr & _regs.imr)
-      {
-	MessageIrqLines msg(MessageIrq::ASSERT_IRQ, _irq);
-	_bus_irqlines.send(msg);
-      }
-  }
-
+	void update_isr(uint8 const value)
+	{
+		_regs.isr |= value;
+		if (_regs.isr & _regs.imr) {
+			MessageIrqLines msg(MessageIrq::ASSERT_IRQ, _irq);
+			_bus_irqlines.send(msg);
+		}
+	}
 
 	void send_packet()
 	{
@@ -283,35 +284,56 @@ public:
 		if (msg.type != MessageNetwork::PACKET_TO_MODEL || msg.client != _net_id)
 			return false;
 
+		Seoul::Lock::Guard guard(_lock);
+
 		return receive_packet(reinterpret_cast<uint8 const *>(msg.data.buffer), msg.data.len);
 	}
 
-  bool receive(MessageIOIn &msg)
-  {
-    unsigned addr = msg.port;
-    if (!match_bar(addr) || !(PCI_CMD_STS & 0x1))
-      return false;
+	bool receive(MessageIOIn &msg)
+	{
+		unsigned addr = msg.port;
+		if (!match_bar(addr))
+			return false;
 
-    // for every byte
-    for (unsigned i = 0; i < (1u<<msg.type); i++, addr++)
-      read_byte(addr, reinterpret_cast<unsigned char *>(&msg.value)+i);
+		Seoul::Lock::Guard guard(_lock);
 
-    return true;
-  }
+		if (!(PCI_CMD_STS & 0x1))
+			return false;
+
+		// for every byte
+		for (unsigned i = 0; i < (1u<<msg.type); i++, addr++)
+			read_byte(addr, reinterpret_cast<unsigned char *>(&msg.value)+i);
+
+		return true;
+	}
 
 
-  bool receive(MessageIOOut &msg)
-  {
-    unsigned addr = msg.port;
-    if (!match_bar(addr) || !(PCI_CMD_STS & 0x1))
-      return false;
+	bool receive(MessageIOOut &msg)
+	{
+		unsigned addr = msg.port;
+		if (!match_bar(addr))
+			return false;
 
-    for (unsigned i = 0; i < (1u<<msg.type); i++, addr++)
-      write_byte(addr, msg.value >> (i*8));
-    return true;
-  }
+		Seoul::Lock::Guard guard(_lock);
 
-  bool receive(MessagePciConfig &msg)  {  return PciHelper::receive(msg, this, _bdf); }
+		if (!(PCI_CMD_STS & 0x1))
+			return false;
+
+		for (unsigned i = 0; i < (1u<<msg.type); i++, addr++)
+			write_byte(addr, msg.value >> (i*8));
+
+		return true;
+	}
+
+	bool receive(MessagePciConfig &msg)
+	{
+		if (msg.bdf != _bdf)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
+		return PciHelper::receive(msg, this, _bdf);
+	}
 
 
 	Rtl8029(DBus<MessageNetwork>  &bus_network,
