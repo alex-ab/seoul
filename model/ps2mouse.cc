@@ -133,21 +133,14 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
     return value;
   }
 
-
-  void set_packet(unsigned long long packet)
-  {
-    _packet = packet;
-    MessagePS2 msg2(_ps2port, MessagePS2::NOTIFY, 0);
-    _bus_ps2.send(msg2);
-  }
-
-
-  void update_packet()
-  {
-    if (!(_packet & 0xff) && ~_status & STATUS_REMOTE)
-      set_packet(gen_packet(true));
-  }
-
+	void update_packet()
+	{
+		if (!(_packet & 0xff) && ~_status & STATUS_REMOTE) {
+			_packet = gen_packet(true);
+			MessagePS2 msg2(_ps2port, MessagePS2::NOTIFY, 0);
+			_bus_ps2.send(msg2);
+		}
+	}
 
  public:
   bool  receive(MessageInput &msg)
@@ -275,7 +268,11 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 	      }
 	    break;
 	  }
-	if (packet & 0xff)  set_packet(packet);
+
+		if (packet & 0xff) {
+			_packet = packet;
+			msg.type = MessagePS2::NOTIFY_ON_REPLY;
+		}
       }
     return res;
   }

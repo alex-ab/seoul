@@ -334,7 +334,8 @@ struct MessagePS2
     {
       NOTIFY,
       READ_KEY,
-      SEND_COMMAND
+      SEND_COMMAND,
+      NOTIFY_ON_REPLY,
     }  type;
   unsigned char value;
   MessagePS2(unsigned _port, Type _type, unsigned char _value) : port(_port), type(_type), value(_value) {}

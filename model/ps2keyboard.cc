@@ -369,8 +369,7 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 	if (new_response)  _response = new_response;
 	if (_response || _mode & MODE_RESEND)
 	  {
-	    MessagePS2 msg2(_ps2port, MessagePS2::NOTIFY, 0);
-	    _bus_ps2.send(msg2);
+		msg.type = MessagePS2::NOTIFY_ON_REPLY;
 	  }
       }
     else  return false;
