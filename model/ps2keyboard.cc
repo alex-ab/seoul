@@ -4,13 +4,15 @@
  * Copyright (C) 2007-2009, Bernhard Kauer <bk@vmmon.org>
  * Economic rights: Technische Universitaet Dresden (Germany)
  *
- * This file is part of Vancouver.
+ * Copyright (C) 2014-2024, Alexander Boettcher
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * This file is part of Seoul/Vancouver.
+ *
+ * Seoul/Vancouver is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul/Vancouver is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -18,6 +20,7 @@
 
 #include "nul/motherboard.h"
 #include "host/keyboard.h"
+#include "service/lock.h"
 
 /**
  * A PS2 keyboard gets characters on the hostbus as input and outputs
@@ -31,6 +34,7 @@
 class PS2Keyboard : public StaticReceiver<PS2Keyboard>
 {
 	DBus<MessagePS2> &_bus_ps2;
+	Seoul::Lock       _lock { };
 
 	enum {
 		MODE_DISABLED = 1 << 0,
@@ -170,217 +174,240 @@ class PS2Keyboard : public StaticReceiver<PS2Keyboard>
       }
   }
 
- public:
+	bool _input(MessageInput &msg, bool &notify)
+	{
+		if (_mode & (MODE_DISABLED | MODE_STOPPED))
+			return false;
 
-  bool  receive(MessageInput &msg)
-  {
-    if (msg.device != _hostkeyboard)  return false;
+		auto const oldwrite = _pwrite;
 
-    if (_mode & (MODE_DISABLED | MODE_STOPPED))
-      return false;
+		if (_scset == 2 || _scset == 1) {
+			unsigned char key = uint8(msg.data);
+			_mode &= uint8(~MODE_GOT_BREAK);
+			if (msg.data & KBFLAG_EXTEND1) {
+				enqueue(0xe1);
+				if (key == 0x77)	        // the pause key ?
+					enqueue_string("\x14\x77\xe1\xf0\x14");
+			}
 
-    unsigned oldwrite = _pwrite;
-    if (_scset == 2 || _scset == 1)
-      {
-	unsigned char key = uint8(msg.data);
-	_mode &= uint8(~MODE_GOT_BREAK);
-	if (msg.data & KBFLAG_EXTEND1)
-	  {
-	    enqueue(0xe1);
-	    if (key == 0x77)	        // the pause key ?
-	      enqueue_string("\x14\x77\xe1\xf0\x14");
-	  }
-	if (key == 0x7e && msg.data & KBFLAG_EXTEND0 && msg.data & KBFLAG_RELEASE)
-	  enqueue_string("\xe0\0x7e"); 	// sysctrl key
+			if (key == 0x7e && msg.data & KBFLAG_EXTEND0 && msg.data & KBFLAG_RELEASE)
+				enqueue_string("\xe0\0x7e"); 	// sysctrl key
 
-	if (~msg.data & KBFLAG_RELEASE)  handle_shift_modifiers(msg.data);
-	if (msg.data & KBFLAG_EXTEND0)   enqueue(0xe0);
-	if (msg.data & KBFLAG_RELEASE)   enqueue(0xf0);
-	enqueue(uint8(msg.data));
-	if (msg.data & KBFLAG_RELEASE)   handle_shift_modifiers(msg.data);
+			if (~msg.data & KBFLAG_RELEASE)  handle_shift_modifiers(msg.data);
+			if (msg.data & KBFLAG_EXTEND0)   enqueue(0xe0);
+			if (msg.data & KBFLAG_RELEASE)   enqueue(0xf0);
+
+			enqueue(uint8(msg.data));
+
+			if (msg.data & KBFLAG_RELEASE)   handle_shift_modifiers(msg.data);
 
 #if 0
-	if ((_pwrite - _pread) % sizeof(_buffer) == sizeof(_buffer) - 1)
-	  {
-	    _pwrite = oldwrite;
-	    enqueue(0x00);
-	  }
+			if ((_pwrite - _pread) % sizeof(_buffer) == sizeof(_buffer) - 1) {
+				_pwrite = oldwrite;
+				enqueue(0x00);
+			}
 #endif
-      }
-    else // _scset == 3
-      {
-	unsigned char key = GenericKeyboard::translate_sc2_to_sc3(msg.data);
+		} else { // _scset == 3
+			unsigned char key = GenericKeyboard::translate_sc2_to_sc3(msg.data);
 
-	// the pause key sends make and break together -> simulate another make
-	if (key == 0x62)  enqueue(key);
-	if (msg.data & KBFLAG_RELEASE) {
+			// the pause key sends make and break together -> simulate another make
+			if (key == 0x62)  enqueue(key);
+			if (msg.data & KBFLAG_RELEASE) {
 
-	  if (_no_breakcode[key >> 3] & (1 << (key & 7)))
-	    return true;
-	  enqueue(0xf0);
+				if (_no_breakcode[key >> 3] & (1 << (key & 7)))
+					return true;
+				enqueue(0xf0);
+			}
+			enqueue(key);
+		}
+
+		notify = oldwrite == _pread;
+
+		return true;
 	}
-	enqueue(key);
-      }
 
-    if (oldwrite == _pread) {
+ public:
 
-      MessagePS2 msg2(_ps2port, MessagePS2::NOTIFY, 0);
-      _bus_ps2.send(msg2);
-    }
+	bool receive(MessageInput &msg)
+	{
+		if (msg.device != _hostkeyboard)
+			return false;
 
-    return true;
-  }
+		bool notify = false;
+		bool result = false;
 
+		{
+			Seoul::Lock::Guard guard(_lock);
+			result = _input(msg, notify);
+		}
 
-  bool  receive(MessagePS2 &msg)
-  {
-    if (msg.port != _ps2port) return false;
-    if (msg.type == MessagePS2::READ_KEY)
-      {
-	if (_mode & MODE_RESEND)
-	  {
-	    msg.value = _last_reply;
-	    _mode &= uint8(~MODE_RESEND);
-	  }
-	else if (_response)
-	  {
-	    msg.value = _response & 0xff;
-	    _response >>= 8;
-	    if (_mode & MODE_RESET)
-	      {
-		assert(!_response && msg.value == 0xfa);
+		if (notify) {
+			MessagePS2 msg2(_ps2port, MessagePS2::NOTIFY, 0);
+			_bus_ps2.send(msg2);
+		}
+
+		return result;
+	}
+
+	bool receive(MessagePS2 &msg)
+	{
+		if (msg.port != _ps2port)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
+		if (msg.type == MessagePS2::READ_KEY) {
+			if (_mode & MODE_RESEND) {
+				msg.value = _last_reply;
+				_mode &= uint8(~MODE_RESEND);
+			} else if (_response) {
+				msg.value = _response & 0xff;
+				_response >>= 8;
+
+				if (_mode & MODE_RESET) {
+					assert(!_response && msg.value == 0xfa);
+					reset();
+					_response = 0xaa;
+					_mode &= uint8(~MODE_RESET);
+				}
+			} else {
+				msg.value = _buffer[_pread];
+
+				if (_pwrite != _pread)
+					_pread = (_pread + 1) % sizeof(_buffer);
+				else
+					return false;
+			}
+
+			_last_reply = msg.value;
+
+			return true;
+		}
+
+		if (msg.type == MessagePS2::SEND_COMMAND) {
+			unsigned new_response = 0xfa;
+			unsigned char command = msg.value;
+			uint8         new_mode = uint8(_mode & ~(MODE_STOPPED | MODE_RESET));
+			switch (msg.value) {
+			case 0xf0: // set scanset
+				_pwrite = _pread = 0;
+
+				[[fallthrough]];
+
+			case 0xed: // set indicators
+			case 0xf3: // set typematic rate/delay
+			case 0xfb: // set key type typematic
+			case 0xfc: // set key type make+break
+			case 0xfd: // set key type make
+				new_mode |= MODE_STOPPED;
+				break;
+			case 0xee: // echo
+				new_response = 0xee;
+				break;
+			case 0xf2: // read ID
+				new_response = 0x83abfa;
+				break;
+			case 0xf4: // enable
+				_pwrite = _pread = 0;
+				new_mode &= uint8(~MODE_DISABLED);
+				break;
+			case 0xf5: // default+disable
+				reset();
+				new_mode |= MODE_DISABLED;
+				break;
+			case 0xf6: // default+enabled
+				reset();
+				new_mode &= uint8(~MODE_DISABLED);
+				break;
+			case 0xf8: // all keys make-break
+			case 0xfa: // all keys make-break+typematic
+				memset(_no_breakcode, 0, sizeof(_no_breakcode));
+				break;
+			case 0xf9: // all keys make
+				memset(_no_breakcode, 0xff, sizeof(_no_breakcode));
+			case 0xf7: // all keys typematic
+				break;
+			case 0xfe:
+				new_mode |= MODE_RESEND;
+				new_response = 0;
+				break;
+			case 0xff:
+				new_mode |= MODE_RESET | MODE_STOPPED;
+				break;
+			default:
+				switch (_last_command) {
+				case 0xed: // set indicators
+					_indicators = msg.value;
+
+					[[fallthrough]];
+
+				case 0xf3: // set typematic rate/delay
+					command = 0;
+					break;
+				case 0xf0: // set scanset
+					switch (msg.value) {
+					case 0:
+						new_response = _scset << 16 | 0xfa;
+						break;
+					case 1 ... 3:
+						_scset = msg.value;
+						new_response = 0xfa;
+						break;
+					default:
+						new_response = 0xff;
+					}
+					command = 0;
+					break;
+				case 0xfc: // set key type make+break
+				case 0xfd: // set key type make
+					if (_last_command == 0xfc)
+						_no_breakcode[msg.value >> 3] &= uint8(~(1u << (msg.value & 7)));
+					else
+						_no_breakcode[msg.value >> 3] |= uint8(1u << (msg.value & 7));
+
+					[[fallthrough]];
+
+				case 0xfb: // set key type typematic
+					if (msg.value)
+						command = _last_command;
+					else
+						new_response = 0xfe;
+					break;
+				default:
+					new_response = 0xfe;
+					command = 0;
+					break;
+				}
+
+				if (command)
+					new_mode |= MODE_STOPPED;
+			}
+
+			_last_command = command;
+			_mode = new_mode;
+
+			if (new_response)
+				_response = new_response;
+
+			if (_response || _mode & MODE_RESEND)
+				msg.type = MessagePS2::NOTIFY_ON_REPLY;
+
+			return true;
+		}
+
+		return false;
+	}
+
+	bool receive(MessageLegacy &msg)
+	{
+		if (msg.type != MessageLegacy::RESET)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
 		reset();
-		_response = 0xaa;
-		_mode &= uint8(~MODE_RESET);
-	      }
-	  }
-	else
-	  {
-	    msg.value = _buffer[_pread];
-	    if (_pwrite != _pread)
-	      _pread = (_pread + 1) % sizeof(_buffer);
-	    else
-	      return false;
-	  }
-	_last_reply = msg.value;
-      }
-    else if (msg.type == MessagePS2::SEND_COMMAND)
-      {
-	unsigned new_response = 0xfa;
-	unsigned char command = msg.value;
-	uint8         new_mode = uint8(_mode & ~(MODE_STOPPED | MODE_RESET));
-	switch (msg.value)
-	  {
-	  case 0xf0: // set scanset
-	    _pwrite = _pread = 0;
-
-	    [[fallthrough]];
-
-	  case 0xed: // set indicators
-	  case 0xf3: // set typematic rate/delay
-	  case 0xfb: // set key type typematic
-	  case 0xfc: // set key type make+break
-	  case 0xfd: // set key type make
-	    new_mode |= MODE_STOPPED;
-	    break;
-	  case 0xee: // echo
-	    new_response = 0xee;
-	    break;
-	  case 0xf2: // read ID
-	    new_response = 0x83abfa;
-	    break;
-	  case 0xf4: // enable
-	    _pwrite = _pread = 0;
-	    new_mode &= uint8(~MODE_DISABLED);
-	    break;
-	  case 0xf5: // default+disable
-	    reset();
-	    new_mode |= MODE_DISABLED;
-	    break;
-	  case 0xf6: // default+enabled
-	    reset();
-	    new_mode &= uint8(~MODE_DISABLED);
-	    break;
-	  case 0xf8: // all keys make-break
-	  case 0xfa: // all keys make-break+typematic
-	    memset(_no_breakcode, 0, sizeof(_no_breakcode));
-	    break;
-	  case 0xf9: // all keys make
-	    memset(_no_breakcode, 0xff, sizeof(_no_breakcode));
-	  case 0xf7: // all keys typematic
-	    break;
-	  case 0xfe:
-	    new_mode |= MODE_RESEND;
-	    new_response = 0;
-	    break;
-	  case 0xff:
-	    new_mode |= MODE_RESET | MODE_STOPPED;
-	    break;
-	  default:
-	    switch (_last_command)
-	      {
-	      case 0xed: // set indicators
-		_indicators = msg.value;
-
-		[[fallthrough]];
-
-	      case 0xf3: // set typematic rate/delay
-		command = 0;
-		break;
-	      case 0xf0: // set scanset
-		switch (msg.value)
-		  {
-		  case 0:
-		    new_response = _scset << 16 | 0xfa;
-		    break;
-		  case 1 ... 3:
-		    _scset = msg.value;
-		    new_response = 0xfa;
-		    break;
-		  default:
-		    new_response = 0xff;
-		  }
-		command = 0;
-		break;
-	      case 0xfc: // set key type make+break
-	      case 0xfd: // set key type make
-		if (_last_command == 0xfc)
-		  _no_breakcode[msg.value >> 3] &= uint8(~(1u << (msg.value & 7)));
-		else
-		  _no_breakcode[msg.value >> 3] |= uint8(1u << (msg.value & 7));
-
-		[[fallthrough]];
-
-	      case 0xfb: // set key type typematic
-		if (msg.value)
-		  command = _last_command;
-		else
-		  new_response = 0xfe;
-		break;
-	      default:
-		new_response = 0xfe;
-		command = 0;
-		break;
-	      }
-	    if (command)  new_mode |= MODE_STOPPED;
-	  }
-	_last_command = command;
-	_mode = new_mode;
-	if (new_response)  _response = new_response;
-	if (_response || _mode & MODE_RESEND)
-	  {
-		msg.type = MessagePS2::NOTIFY_ON_REPLY;
-	  }
-      }
-    else  return false;
-    return true;
-  }
-
-  bool  receive(MessageLegacy &msg) {
-    if (msg.type != MessageLegacy::RESET) return false;
-    reset();
-    return true;
-  }
+		return true;
+	}
 
 	PS2Keyboard(DBus<MessagePS2> &bus_ps2, unsigned ps2port, unsigned hostkeyboard)
 	: _bus_ps2(bus_ps2), _ps2port(ps2port), _hostkeyboard(hostkeyboard)
