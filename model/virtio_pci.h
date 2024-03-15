@@ -115,6 +115,8 @@ class Virtio::Device
 		bool         _verbose        { false };
 		bool         _config_changed { false };
 
+		bool         _assert_irq   { };
+		bool         _deassert_irq { };
 
 		uint32       _control   { 0 };
 		uint32       _status    { 1u << 20 /* cap list support */ };
@@ -206,6 +208,28 @@ class Virtio::Device
 
 		void config_changed() { _config_changed = true; }
 
+		bool sync_and_irq(auto &lock, auto const &fn)
+		{
+			bool assert_irq   = false;
+			bool deassert_irq = false;
+			bool result       = false;
+
+			{
+				Seoul::Lock::Guard guard(lock);
+
+				result = fn();
+
+				assert_irq   = _assert_irq;
+				deassert_irq = _deassert_irq;
+
+				_assert_irq = _deassert_irq = false;
+			}
+
+			assert_irqs(assert_irq, deassert_irq);
+
+			return result;
+		}
+
 	public:
 
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
@@ -228,6 +252,9 @@ class Virtio::Device
 			_bar0_size      = false;
 			_all_notify     = false;
 			_config_changed = false;
+
+			_assert_irq     = false;
+			_deassert_irq   = false;
 
 			_dev_feature_word  = 0u;
 			_drv_feature_word  = 0u;
@@ -480,8 +507,7 @@ class Virtio::Device
 						/* read clears & deassert IRQ */
 						_status &= ~(1u << 3);
 
-						MessageIrqLines msg(MessageIrq::DEASSERT_IRQ, _irq);
-						_bus_irqlines.send(msg);
+						_deassert_irq = true;
 					}
 					else
 						*msg.ptr = 0;
@@ -500,7 +526,19 @@ class Virtio::Device
 		{
 			_status |= 1u << 3; /* not required for MSI-X XXX */
 
-			MessageIrqLines msg_irq(MessageIrq::ASSERT_IRQ, _irq);
-			_bus_irqlines.send(msg_irq);
+			_assert_irq = true;
+		}
+
+		void assert_irqs(bool assert_irq, bool deassert_irq)
+		{
+			if (deassert_irq) {
+				MessageIrqLines msg(MessageIrq::DEASSERT_IRQ, _irq);
+				_bus_irqlines.send(msg);
+			}
+
+			if (assert_irq) {
+				MessageIrqLines msg_irq(MessageIrq::ASSERT_IRQ, _irq);
+				_bus_irqlines.send(msg_irq);
+			}
 		}
 };
