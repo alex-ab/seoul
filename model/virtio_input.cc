@@ -1,7 +1,7 @@
 /**
  * Virtio input device
  *
- * Copyright (C) 2021-2022, Alexander Boettcher
+ * Copyright (C) 2021-2024, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -18,6 +18,7 @@
 #include "nul/motherboard.h"
 #include "executor/bios.h"
 #include "model/pci.h"
+#include "service/lock.h"
 
 #include "virtio_pci.h"
 
@@ -216,15 +217,15 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 {
 	private:
 
-		unsigned const  _device { 0x10002 };
-
+		unsigned    const  _device { 0x10002 };
+		Seoul::Lock        _lock { };
 		Virtio_input_config _input_config { };
 
 		~Virtio_input();
 
 	public:
 
-		unsigned res_x  { };
+		unsigned res_x { };
 		unsigned res_y { };
 
 		Virtio_input(DBus<MessageIrqLines>  &bus_irqlines,
@@ -238,9 +239,13 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			               2 /* queues */)
 		{ }
 
-		bool receive(MessageBios &msg) {
-			switch(msg.irq) {
+		bool receive(MessageBios &msg)
+		{
+			switch (msg.irq) {
 			case BiosCommon::BIOS_RESET_VECTOR:
+
+				Seoul::Lock::Guard guard(_lock);
+
 				_input_config = { };
 				reset();
 			};
@@ -248,28 +253,37 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			return false;
 		}
 
-		bool receive(MessagePciConfig &msg) {
-			return Virtio::Device::receive(msg); }
+		bool receive(MessagePciConfig &msg)
+		{
+			if (msg.bdf != _bdf)
+				return false;
+
+			return sync_and_irq(_lock, [&]() {
+				return Virtio::Device::receive(msg); });
+		}
 
 		bool receive(MessageMem &msg)
 		{
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = unsigned(msg.phys - _phys_bar_base);
+			return sync_and_irq(_lock, [&]() {
 
-			switch (offset) {
-			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
-				if (msg.read)
-					*msg.ptr = _input_config.read(offset - BAR_OFFSET_CONFIG,
-					                              res_x, res_y);
-				else
-					_input_config.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+				unsigned const offset = unsigned(msg.phys - _phys_bar_base);
 
-				return true;
-			default:
-				return Virtio::Device::receive(msg);
-			}
+				switch (offset) {
+				case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
+					if (msg.read)
+						*msg.ptr = _input_config.read(offset - BAR_OFFSET_CONFIG,
+						                              res_x, res_y);
+					else
+						_input_config.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+
+					return true;
+				default:
+					return Virtio::Device::receive(msg);
+				}
+			});
 		}
 
 		bool button_click(MessageInput &msg)
@@ -385,12 +399,16 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			if (msg.device != _device)
 				return false;
 
-			bool ok = _receive(msg);
-			if (ok) {
-				msg.data  = res_x;
-				msg.data2 = res_y;
-			}
-			return ok;
+			return sync_and_irq(_lock, [&]() {
+
+				bool const ok = _receive(msg);
+				if (ok) {
+					msg.data  = res_x;
+					msg.data2 = res_y;
+				}
+
+				return ok;
+			});
 		}
 
 		bool _receive(MessageInput &msg)
