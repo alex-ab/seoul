@@ -18,6 +18,7 @@
 #include "nul/motherboard.h"
 #include "executor/bios.h"
 #include "model/pci.h"
+#include "service/lock.h"
 
 #include "virtio_pci.h"
 
@@ -91,7 +92,8 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		DBus<MessageAudio> &_bus_audio;
 		Clock              &_clock;
 
-		Virtio_sound_state _state  { };
+		Seoul::Lock         _lock { };
+		Virtio_sound_state _state { };
 
 		bool _verbose { false };
 
@@ -358,9 +360,13 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			_clock(clock)
 		{ }
 
-		bool receive(MessageBios &msg) {
+		bool receive(MessageBios &msg)
+		{
 			switch(msg.irq) {
 			case BiosCommon::BIOS_RESET_VECTOR:
+
+				Seoul::Lock::Guard guard(_lock);
+
 				_state = { };
 				reset();
 			};
@@ -368,27 +374,36 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			return false;
 		}
 
-		bool receive(MessagePciConfig &msg) {
-			return Virtio::Device::receive(msg); }
+		bool receive(MessagePciConfig &msg)
+		{
+			if (msg.bdf != _bdf)
+				return false;
+
+			return sync_and_irq(_lock, [&]() {
+				return Virtio::Device::receive(msg); });
+		}
 
 		bool receive(MessageMem &msg)
 		{
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			unsigned const offset = unsigned(msg.phys - _phys_bar_base);
+			return sync_and_irq(_lock, [&]() {
 
-			switch (offset) {
-			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
-				if (msg.read)
-					*msg.ptr = _state.read(offset - BAR_OFFSET_CONFIG);
-				else
-					_state.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+				unsigned const offset = unsigned(msg.phys - _phys_bar_base);
 
-				return true;
-			default:
-				return Virtio::Device::receive(msg);
-			}
+				switch (offset) {
+				case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
+					if (msg.read)
+						*msg.ptr = _state.read(offset - BAR_OFFSET_CONFIG);
+					else
+						_state.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+
+					return true;
+				default:
+					return Virtio::Device::receive(msg);
+				}
+			});
 		}
 
 		bool receive(MessageAudio &msg)
@@ -398,30 +413,33 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			if (msg.type != MessageAudio::Type::AUDIO_CONTINUE_TX)
 				return false;
 
-			if (_state.idx_valid) {
-				if (!_state.host_msg.match(msg.id))
-					return true;
+			return sync_and_irq(_lock, [&]() {
 
-				_state.idx_done = true;
-			}
+				if (_state.idx_valid) {
+					if (!_state.host_msg.match(msg.id))
+						return true;
 
-			bool restart = _state.idx_done;
+					_state.idx_done = true;
+				}
 
-			/* continue if we got blocked by VMM host side */
-			if (!tx(queue_tx)) {
-				tx_drain(queue_tx);
-				msg.type = MessageAudio::Type::AUDIO_DRAIN_TX;
-				return true;
-			}
+				bool restart = _state.idx_done;
 
-			if (restart) {
+				/* continue if we got blocked by VMM host side */
 				if (!tx(queue_tx)) {
 					tx_drain(queue_tx);
 					msg.type = MessageAudio::Type::AUDIO_DRAIN_TX;
+					return true;
 				}
-			}
 
-			return true;
+				if (restart) {
+					if (!tx(queue_tx)) {
+						tx_drain(queue_tx);
+						msg.type = MessageAudio::Type::AUDIO_DRAIN_TX;
+					}
+				}
+
+				return true;
+			});
 		}
 
 		void tx_drain(Virtio::Queue &tx_queue)
