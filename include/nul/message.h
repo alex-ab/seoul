@@ -205,9 +205,11 @@ class FisReceiver;
  */
 struct MessageAhciSetDrive
 {
-  FisReceiver *drive;
-  unsigned port;
-  MessageAhciSetDrive(FisReceiver *_drive, unsigned _port) : drive(_drive), port(_port) {}
+	FisReceiver *drive;
+	unsigned const port;
+
+	MessageAhciSetDrive(FisReceiver *_drive, unsigned _port)
+	: drive(_drive), port(_port) {}
 };
 
 

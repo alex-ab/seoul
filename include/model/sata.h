@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include "service/lock.h"
+
 class FisReceiver
 {
 	private:
@@ -32,14 +34,13 @@ class FisReceiver
 
 		enum { FIS_TYPE_DMA_SETUP = 0x41 };
 
-		FisReceiver *_peer;
-
 		~FisReceiver() {}
 
 	public:
 
-		FisReceiver() : _peer(nullptr) {}
+		Seoul::Lock _lock { };
+
+		FisReceiver() {}
 
 		virtual void receive_fis(size_t fislen, unsigned *fis) = 0;
-		void set_peer(FisReceiver *peer) { _peer = peer; }
 };

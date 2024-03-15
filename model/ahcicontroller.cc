@@ -20,6 +20,7 @@
 #include "nul/motherboard.h"
 #include "model/sata.h"
 #include "model/pci.h"
+#include "service/lock.h"
 
 
 class ParentIrqProvider
@@ -135,15 +136,18 @@ public:
   };
 
 
-  bool set_drive(FisReceiver *drive)
-  {
-    if (_drive) return true;
-    _drive = drive;
-    _drive->set_peer(this);
+	bool set_drive(FisReceiver *drive)
+	{
+		if (_drive) {
+			/* trigger comreset on re-claim attempt */
+			comreset();
+			return true;
+		}
 
-    comreset();
-    return false;
-  }
+		_drive = drive;
+
+		return false;
+	}
 
 
   void comreset()
@@ -315,102 +319,146 @@ VMM_REGSET(AhciController,
 class AhciController : public ParentIrqProvider,
                        public StaticReceiver<AhciController>
 {
-  enum {
-    MAX_PORTS = 32,
-  };
-  DBus<MessageIrqLines> &_bus_irqlines;
-  DBus<MessageMem> 	&_bus_mem;
-  unsigned char _irq;
-  AhciPort _ports[MAX_PORTS];
-  unsigned _bdf;
+	enum { MAX_PORTS = 32 };
+
+	DBus<MessageIrqLines> &_bus_irqlines;
+	DBus<MessageMem>      &_bus_mem;
+	Seoul::Lock            _lock { };
+
+	uint8     const _irq;
+	AhciPort        _ports[MAX_PORTS];
+	unsigned  const _bdf;
+
 #define AHCI_CONTROLLER
 #define  VMM_REGBASE "../model/ahcicontroller.cc"
 #include "model/reg.h"
 
-  bool match_bar(uint64 &address) {
-    bool res = !((address ^ PCI_ABAR) & PCI_ABAR_mask);
-    address &= ~PCI_ABAR_mask;
-    return res;
-  }
-
+	bool match_bar(uint64 &address)
+	{
+		bool res = !((address ^ PCI_ABAR) & PCI_ABAR_mask);
+		address &= ~PCI_ABAR_mask;
+		return res;
+	}
 
  public:
 
-  void trigger_irq (void * child) override {
-    auto index = reinterpret_cast<AhciPort *>(child) - _ports;
-    if (index < 0 || index >= MAX_PORTS)
-      Logging::panic("unknown ahci port");
+	void trigger_irq(void * child) override
+	{
+		auto index = reinterpret_cast<AhciPort *>(child) - _ports;
+		if (index < 0 || index >= MAX_PORTS)
+			Logging::panic("unknown ahci port");
 
-    if (~REG_IS & (1 << index))
-      {
-	REG_IS |= 1 << index;
-	if (REG_GHC & 0x2) {
+		if (!(~REG_IS & (1 << index)))
+			return;
 
-	    // MSI?
-	    if (PCI_MSI_CTRL & 0x10000) {
-	      MessageMem msg(false, PCI_MSI_ADDR, &PCI_MSI_DATA);
-	      _bus_mem.send(msg);
+		REG_IS |= 1 << index;
 
-	    } else {
-	      MessageIrqLines msg(MessageIrq::ASSERT_IRQ, _irq);
-	      _bus_irqlines.send(msg);
-	    }
-	  }
-      }
-  };
+		if (!(REG_GHC & 0x2))
+			return;
 
+		// MSI?
+		if (PCI_MSI_CTRL & 0x10000) {
+			MessageMem msg(false, PCI_MSI_ADDR, &PCI_MSI_DATA);
+			_bus_mem.send(msg);
+		} else {
+			MessageIrqLines msg(MessageIrq::ASSERT_IRQ, _irq);
+			_bus_irqlines.send(msg);
+		}
+	}
 
-  bool receive(MessageMem &msg)
-  {
-    auto addr = msg.phys;
-    if (!match_bar(addr) || !(PCI_CMD_STS & 0x2))
-      return false;
+	bool receive(MessageMem &msg)
+	{
+		auto addr = msg.phys;
+		if (!match_bar(addr))
+			return false;
 
-    assert(!(addr & 0x3));
+		bool const access_ctrl  = addr < 0x100;
+		bool const access_ports = !(access_ctrl) && (addr < 0x100 + MAX_PORTS * 0x80);
 
-    bool res;
-    unsigned uvalue = 0;
-    if (addr < 0x100)
-      res = msg.read ? AhciController_read(unsigned(addr), uvalue) : AhciController_write(unsigned(addr), *msg.ptr);
-    else if (addr < 0x100+MAX_PORTS*0x80)
-      res = msg.read ? _ports[(addr - 0x100) / 0x80].AhciPort_read(addr & 0x7f, uvalue) : _ports[(addr - 0x100) / 0x80].AhciPort_write(addr & 0x7f, *msg.ptr);
-    else
-      return false;
+		if (!access_ctrl && !access_ports)
+			return false;
 
-    if (res && msg.read)  *msg.ptr = uvalue;
-    else if (!res)  Logging::printf("%s(%zx) %s failed\n", __PRETTY_FUNCTION__, size_t(addr), msg.read ? "read" : "write");
-    return true;
-  }
+		Seoul::Lock::Guard guard(_lock);
 
+		if (!(PCI_CMD_STS & 0x2))
+			return false;
 
-  bool receive(MessageAhciSetDrive &msg)
-  {
-    if (msg.port > MAX_PORTS || _ports[msg.port].set_drive(msg.drive)) return false;
+		assert(!(addr & 0x3));
 
-    // enable it in the PI register
-    REG_PI |= 1 << msg.port;
+		bool     res    = false;
+		unsigned uvalue = 0;
 
-    /**
-     * fix CAP, according to the spec this is unnneeded, but Linux
-     * 2.6.24 checks and sometimes crash without it!
-     */
-    unsigned count = 0;
-    unsigned value = REG_PI;
-    for (;value; value >>= 1) { count += value & 1; }
-    REG_CAP = (REG_CAP & ~0x1f) | (count - 1);
-    return true;
-  }
+		if (access_ctrl)
+			res = msg.read ? AhciController_read (unsigned(addr), uvalue)
+			               : AhciController_write(unsigned(addr), *msg.ptr);
+		else
+		if (access_ports) {
+			auto & port = _ports[(addr - 0x100) / 0x80];
 
-  bool receive(MessagePciConfig &msg) { return PciHelper::receive(msg, this, _bdf); }
-  AhciController(Motherboard &mb, unsigned char irq, unsigned bdf)
-    : _bus_irqlines(mb.bus_irqlines), _bus_mem(mb.bus_mem), _irq(irq), _bdf(bdf)
-  {
-    for (unsigned i=0; i < MAX_PORTS; i++) _ports[i].set_parent(this, &mb.bus_memregion, &mb.bus_mem);
-    PCI_reset();
-    AhciController_reset();
-  };
+			Seoul::Lock::Guard guard(port._lock);
 
-  virtual ~AhciController() { }
+			res = msg.read ? port.AhciPort_read (addr & 0x7f, uvalue)
+			               : port.AhciPort_write(addr & 0x7f, *msg.ptr);
+		}
+
+		if (res && msg.read)
+			*msg.ptr = uvalue;
+		else if (!res)
+			Logging::printf("%s(%zx) %s failed\n", __PRETTY_FUNCTION__,
+			                size_t(addr), msg.read ? "read" : "write");
+
+		return true;
+	}
+
+	bool receive(MessageAhciSetDrive &msg)
+	{
+		if (msg.port > MAX_PORTS)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
+		if (_ports[msg.port].set_drive(msg.drive))
+			return false;
+
+		msg.drive = &_ports[msg.port];
+
+		// enable it in the PI register
+		REG_PI |= 1 << msg.port;
+
+		/**
+		 * fix CAP, according to the spec this is unnneeded, but Linux
+		 * 2.6.24 checks and sometimes crash without it!
+		 */
+		unsigned count = 0;
+		unsigned value = REG_PI;
+
+		for (; value; value >>= 1) { count += value & 1; }
+
+		REG_CAP = (REG_CAP & ~0x1f) | (count - 1);
+		return true;
+	}
+
+	bool receive(MessagePciConfig &msg)
+	{
+		if (msg.bdf != _bdf)
+			return false;
+
+		Seoul::Lock::Guard guard(_lock);
+
+		return PciHelper::receive(msg, this, _bdf);
+	}
+
+	AhciController(Motherboard &mb, unsigned char irq, unsigned bdf)
+	: _bus_irqlines(mb.bus_irqlines), _bus_mem(mb.bus_mem), _irq(irq), _bdf(bdf)
+	{
+		for (auto & port : _ports)
+			port.set_parent(this, &mb.bus_memregion, &mb.bus_mem);
+
+		PCI_reset();
+		AhciController_reset();
+	};
+
+	virtual ~AhciController() { }
 };
 
 PARAM_HANDLER(ahci,

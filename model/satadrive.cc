@@ -39,6 +39,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 		#include "model/simplemem.h"
 
 		DBus<MessageDisk>   &_bus_disk;
+		FisReceiver         &_peer;
 
 		unsigned       const _hostdisk;
 		DiskParameter  const _params;
@@ -92,7 +93,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 			d2h[4] = _dsf.slot_id;
 			// make sure we never reuse this!
 			_dsf.slot_id = 0;
-			_peer->receive_fis(5, d2h);
+			_peer.receive_fis(5, d2h);
 		}
 
 
@@ -108,7 +109,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 			psf[2] = _regs[2];
 			psf[3] = _status << 24 | (_regs[3] & 0xffff);
 			psf[4] = length;
-			_peer->receive_fis(5, psf);
+			_peer.receive_fis(5, psf);
 		}
 
 
@@ -117,7 +118,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 			unsigned dsf[7];
 			memset(dsf, 0, sizeof(dsf));
 			dsf[0] = 0x800 /* interrupt */ | (direction ? 0x200 : 0)| 0x41;
-			_peer->receive_fis(7, dsf);
+			_peer.receive_fis(7, dsf);
 		}
 
 		void _comreset()
@@ -151,22 +152,43 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 
 		~SataDrive();
 
+		FisReceiver &_request_peer(DBus<MessageAhciSetDrive> &bus_ahci,
+		                           unsigned port_id, unsigned ctrl_id)
+		{
+			// XXX put on SATA bus
+			MessageAhciSetDrive msg(this, port_id);
+			bool result = bus_ahci.send(msg, ctrl_id);
+
+			if (!result || !msg.drive)
+				Logging::panic("AHCI controller not found for drive\n");
+
+			return *msg.drive;
+		}
+
 	public:
 
 		bool receive(MessageDiskCommit &msg);
 
-		SataDrive(DBus<MessageDisk>       &bus_disk,
-		          DBus<MessageMemRegion>  *bus_memregion,
-		          DBus<MessageMem>        *bus_mem,
-		          unsigned          const  hostdisk,
-		          DiskParameter     const &params,
-		          bool              const  verbose)
-		: _bus_memregion(bus_memregion), _bus_mem(bus_mem),
-		  _bus_disk(bus_disk), _hostdisk(hostdisk), _params(params), _verbose(verbose)
+		SataDrive(DBus<MessageDisk>         &bus_disk,
+		          DBus<MessageMemRegion>    *bus_memregion,
+		          DBus<MessageMem>          *bus_mem,
+		          DBus<MessageAhciSetDrive> &bus_ahci,
+		          unsigned          const    hostdisk,
+		          DiskParameter     const   &params,
+		          unsigned          const    port_id,
+		          unsigned          const    ctrl_id,
+		          bool              const    verbose)
+		: _bus_memregion(bus_memregion), _bus_mem(bus_mem), _bus_disk(bus_disk),
+		  _peer(_request_peer(bus_ahci, port_id, ctrl_id)),
+		  _hostdisk(hostdisk), _params(params), _verbose(verbose)
 		{
 			if (_verbose)
 				Logging::printf("SATA disk %x flags %x sectors %zx\n",
 				                hostdisk, _params.flags, size_t(_params.sectors));
+
+			/* trigger explicitly comreset in set_drive due to this retry */
+			MessageAhciSetDrive msg(this, port_id);
+			bus_ahci.send(msg, ctrl_id);
 		}
 };
 
@@ -549,6 +571,8 @@ bool SataDrive::receive(MessageDiskCommit &msg)
 	if (msg.disknr != _hostdisk)
 		return false;
 
+	Seoul::Lock::Guard guard(_peer._lock);
+
 	if ((msg.status == MessageDisk::DISK_STATUS_RESUME)) {
 		if (_resume.valid()) {
 			switch (_do_operation(_resume)) {
@@ -591,13 +615,9 @@ PARAM_HANDLER(drive,
 	       "sata drive could not get disk %x parameters error %x",
 	       hostdisk, msg0.error);
 
-	SataDrive *drive = new SataDrive(mb.bus_disk, &mb.bus_memregion, &mb.bus_mem,
-	                                 hostdisk, params,
-	                                 (argv[3] == ~0UL) ? false : (argv[3] != 0UL));
+	auto drive = new SataDrive(mb.bus_disk, &mb.bus_memregion, &mb.bus_mem,
+	                           mb.bus_ahcicontroller, hostdisk, params,
+	                           unsigned(argv[2]), unsigned(argv[1]),
+	                           (argv[3] == ~0UL) ? false : (argv[3] != 0UL));
 	mb.bus_diskcommit.add(drive, SataDrive::receive_static<MessageDiskCommit>);
-
-	// XXX put on SATA bus
-	MessageAhciSetDrive msg(drive, unsigned(argv[2]));
-	if (!mb.bus_ahcicontroller.send(msg, unsigned(argv[1])))
-		Logging::panic("AHCI controller #%ld does not allow to set drive #%lx\n", argv[1], argv[2]);
 }
