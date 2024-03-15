@@ -18,6 +18,7 @@
 #include "nul/motherboard.h"
 #include "executor/bios.h"
 #include "model/pci.h"
+#include "service/lock.h"
 
 #include "virtio_pci.h"
 
@@ -171,6 +172,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 	private:
 
 		DBus<MessageConsole> &_bus_console;
+		Seoul::Lock           _lock { };
 		Virtio_gpu_config     _config          { };
 		bool                  _memory_pressure { };
 		bool const            _verbose;
@@ -369,12 +371,22 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			_verbose(verbose)
 		{ }
 
-		bool receive(MessagePciConfig &msg) {
-			return Virtio::Device::receive(msg); }
+		bool receive(MessagePciConfig &msg)
+		{
+			if (msg.bdf != _bdf)
+				return false;
 
-		bool receive(MessageBios &msg) {
+			return sync_and_irq(_lock, [&]() {
+				return Virtio::Device::receive(msg); });
+		}
+
+		bool receive(MessageBios &msg)
+		{
 			switch(msg.irq) {
 			case BiosCommon::BIOS_RESET_VECTOR:
+
+				Seoul::Lock::Guard guard(_lock);
+
 				_config = { };
 				reset_resources();
 				reset();
@@ -388,19 +400,22 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			if (msg.phys < _phys_bar_base || _phys_bar_base + PHYS_BAR_SIZE <= msg.phys)
 				return false;
 
-			auto const offset = unsigned(msg.phys - _phys_bar_base);
+			return sync_and_irq(_lock, [&]() {
 
-			switch (offset) {
-			case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
-				if (msg.read)
-					*msg.ptr = _config.read(offset - BAR_OFFSET_CONFIG);
-				else
-					_config.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+				auto const offset = unsigned(msg.phys - _phys_bar_base);
 
-				return true;
-			default:
-				return Virtio::Device::receive(msg);
-			}
+				switch (offset) {
+				case BAR_OFFSET_CONFIG ... BAR_OFFSET_CONFIG + RANGE_SIZE - 1:
+					if (msg.read)
+						*msg.ptr = _config.read(offset - BAR_OFFSET_CONFIG);
+					else
+						_config.write(offset - BAR_OFFSET_CONFIG, *msg.ptr);
+
+					return true;
+				default:
+					return Virtio::Device::receive(msg);
+				}
+			});
 		}
 
 		void update_mode_host(unsigned const width, unsigned const height)
@@ -424,31 +439,34 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			if (msg.width < 320 || msg.height < 200)
 				return true;
 
-			mode_next.width  = msg.width;
-			mode_next.height = msg.height;
+			return sync_and_irq(_lock, [&]() {
 
-			/* avoid causing high allocation frequency for small pixel change */
-			bool handle = (int(mode_host.width)  - int(mode_next.width)  >=  16) ||
-			              (int(mode_host.width)  - int(mode_next.width)  <= -16) ||
-			              (int(mode_host.height) - int(mode_next.height) >=  16) ||
-			              (int(mode_host.height) - int(mode_next.height) <= -16);
+				mode_next.width  = msg.width;
+				mode_next.height = msg.height;
 
-			if (!handle)
+				/* avoid causing high allocation frequency for small pixel change */
+				bool handle = (int(mode_host.width)  - int(mode_next.width)  >=  16) ||
+				              (int(mode_host.width)  - int(mode_next.width)  <= -16) ||
+				              (int(mode_host.height) - int(mode_next.height) >=  16) ||
+				              (int(mode_host.height) - int(mode_next.height) <= -16);
+
+				if (!handle)
+					return true;
+
+				update_mode_host(mode_next.width, mode_next.height);
+
+				if (_verbose)
+					Logging::printf("virtio gpu %ux%u triggered by host\n",
+					                mode_host.width, mode_host.height);
+
+				/* notify guest */
+				_config.event = VIRTIO_GPU_EVENT;
+
+				config_changed();
+				inject_irq();
+
 				return true;
-
-			update_mode_host(mode_next.width, mode_next.height);
-
-			if (_verbose)
-				Logging::printf("virtio gpu %ux%u triggered by host\n",
-				                mode_host.width, mode_host.height);
-
-			/* notify guest */
-			_config.event = VIRTIO_GPU_EVENT;
-
-			config_changed();
-			inject_irq();
-
-			return true;
+			});
 		}
 
 		enum {
