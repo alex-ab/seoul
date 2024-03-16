@@ -19,6 +19,7 @@
 #include "nul/motherboard.h"
 #include "executor/bios.h"
 #include "host/dma.h"
+#include "service/lock.h"
 
 /**
  * Virtual Bios disk routines.
@@ -37,7 +38,9 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
     DISK_COUNT = 0x75,
     WAKEUP_IRQ = 1,
   };
-  unsigned _timer { 0 };
+
+  unsigned      _timer { };
+  Seoul::Lock   _lock  { };
   DiskParameter _disk_params[MAX_DISKS] { };
 
   unsigned short const _disk_boot;
@@ -256,64 +259,96 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
 
 public:
 
-  /**
-   * Get disk commit.
-   */
-  bool  receive(MessageDiskCommit &msg)
-  {
-    if (msg.usertag == MAGIC_DISK_TAG) {
-	write_bda(DISK_COMPLETION_CODE, msg.status, 1);
-	if (_diskop_inprogress) {
-	  _diskop_inprogress = false;
-	  MessageIrqLines msg2(MessageIrq::ASSERT_IRQ, WAKEUP_IRQ);
-	  _mb.bus_irqlines.send(msg2);
-	  return true;
+	/**
+	 * Get disk commit.
+	 */
+	bool receive(MessageDiskCommit &msg)
+	{
+		if (msg.usertag != MAGIC_DISK_TAG)
+			return false;
+
+		bool assert_irq = false;
+
+		{
+			Seoul::Lock::Guard guard(_lock);
+
+			write_bda(DISK_COMPLETION_CODE, msg.status, 1);
+
+			if (_diskop_inprogress) {
+				_diskop_inprogress = false;
+				assert_irq = true;
+			}
+		}
+
+		if (assert_irq) {
+			MessageIrqLines msg2(MessageIrq::ASSERT_IRQ, WAKEUP_IRQ);
+			_mb.bus_irqlines.send(msg2);
+			return true;
+		}
+
+		return false;
 	}
-    }
-    return false;
-  }
 
-  /**
-   * Get disk timeout.
-   */
-  bool  receive(MessageTimeout &msg)
-  {
-    if (msg.nr == _timer) {
-      if (_diskop_inprogress) {
+	/**
+	 * Get disk timeout.
+	 */
+	bool receive(MessageTimeout &msg)
+	{
+		if (msg.nr != _timer)
+			return false;
 
-	// a timeout happened
-	Logging::printf("BIOS disk timeout\n");
-	write_bda(DISK_COMPLETION_CODE, 1, 1);
-	_diskop_inprogress = false;
+		bool assert_irq = false;
 
-	// send a message to wakeup the client
-	MessageIrqLines msg2(MessageIrq::ASSERT_IRQ, WAKEUP_IRQ);
-	_mb.bus_irqlines.send(msg2);
-      }
-      return true;
-    }
-    return false;
-  };
+		{
+			Seoul::Lock::Guard guard(_lock);
 
-  bool  receive(MessageBios &msg) {
-    switch(msg.irq) {
-    case 0x13:  return handle_int13(msg);
-    case 0x19:  return boot_from_disk(msg);
-    case 0x76:
-      if (_diskop_inprogress) {
+			if (_diskop_inprogress) {
 
-	// make sure we are interruptible
-	msg.cpu->efl |= 0x200;
-	msg.mtr_out |= MTD_RFLAGS;
-	return jmp_int(msg, 0x76);
-      }
-      msg.cpu->ah = read_bda<unsigned char>(DISK_COMPLETION_CODE);
-      msg.mtr_out |= MTD_GPR_ACDB;
-      return true;
-    default:    return false;
-    }
-  }
+				// a timeout happened
+				Logging::printf("BIOS disk timeout\n");
+				write_bda(DISK_COMPLETION_CODE, 1, 1);
+				_diskop_inprogress = false;
+				assert_irq = true;
+			}
+		}
 
+		if (assert_irq) {
+			// send a message to wakeup the client
+			MessageIrqLines msg2(MessageIrq::ASSERT_IRQ, WAKEUP_IRQ);
+			_mb.bus_irqlines.send(msg2);
+		}
+
+		return true;
+	}
+
+	bool receive(MessageBios &msg)
+	{
+		switch(msg.irq) {
+		case 0x13: {
+			Seoul::Lock::Guard guard(_lock);
+			return handle_int13(msg);
+		}
+		case 0x19: {
+			Seoul::Lock::Guard guard(_lock);
+			return boot_from_disk(msg);
+		}
+		case 0x76: {
+			Seoul::Lock::Guard guard(_lock);
+			if (_diskop_inprogress) {
+				// make sure we are interruptible
+				msg.cpu->efl |= 0x200;
+				msg.mtr_out |= MTD_RFLAGS;
+				return jmp_int(msg, 0x76);
+			}
+
+			msg.cpu->ah = read_bda<unsigned char>(DISK_COMPLETION_CODE);
+			msg.mtr_out |= MTD_GPR_ACDB;
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
 
   VirtualBiosDisk(Motherboard &mb, unsigned short const disk_boot, unsigned short disk_count)
   : BiosCommon(mb), _disk_boot(disk_boot), _disk_count(disk_count)
