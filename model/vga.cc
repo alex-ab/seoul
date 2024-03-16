@@ -22,6 +22,7 @@
 #include "nul/motherboard.h"
 #include "executor/bios.h"
 #include "host/screen.h"
+#include "service/lock.h"
 
 /**
  * A VGA compatible device.
@@ -42,6 +43,7 @@ public:
     CONSOLE_ID = 0,
   };
 private:
+  Seoul::Lock    _lock { };
   uintptr_t      _framebuffer_ptr;
   uint32         _framebuffer_phys; /* in VBE 2 only 32 bit field */
   size_t         _framebuffer_size;
@@ -423,126 +425,138 @@ private:
 
 public:
 
-  bool  receive(MessageBios &msg)
-  {
-    switch(msg.irq)
-      {
-      case 0x10: return handle_int10(msg);
-      case BIOS_RESET_VECTOR: return handle_reset(true);
-      default:
-	return false;
-      }
-  }
+	bool receive(MessageBios &msg)
+	{
+		switch(msg.irq) {
+		case 0x10: {
+			Seoul::Lock::Guard guard(_lock);
+			return handle_int10(msg);
+		}
+		case BIOS_RESET_VECTOR: {
+			Seoul::Lock::Guard guard(_lock);
+			return handle_reset(true);
+		}
+		default:
+			return false;
+		}
+	}
 
 
-  bool  receive(MessageIOOut &msg)
-  {
-    bool res = false;
-    for (unsigned i = 0; i < (1u << msg.type); i++)
-      {
-	unsigned char value = uint8(msg.value >> i*8);
-	if (in_range(msg.port + i, _iobase, 32))
-	  {
-	    switch (msg.port + i - _iobase)
-	      {
-	      case 0x0: // attribute address and write
-	      case 0x1: // attribute read
-	      case 0x8: // dac address write mode
-	      case 0x9: // dac data
-	      case 0xe: // graphics controller address
-	      case 0xf: // graphics controller data
-		break;
-	      case 0x14: // crt address
-		_crt_index = value;
-		break;
-	      case 0x15: // crt data
-		switch (_crt_index)
-		  {
-		  case 0x0a: // cursor scanline start
-		    _regs.cursor_style = uint16((value << 8) | (_regs.cursor_style & 0xff));
-		    break;
-		  case 0x0b: // cursor scanline end
-		    _regs.cursor_style = uint16((_regs.cursor_style & ~0xff) | value);
-		    break;
-		  case 0x0e: // cursor location high
-		    _regs.cursor_pos = TEXT_OFFSET + ((value << 8) | (_regs.cursor_pos & 0xff));
-		    break;
-		  case 0x0f: // cursor location low
-		    _regs.cursor_pos = (_regs.cursor_pos & ~0xff) | value;
-		    break;
-		  case 0x0c: // start address high
-		    _regs.offset = TEXT_OFFSET + ((value << 8) | (_regs.offset & 0xff));
-		    break;
-		  case 0x0d: // start address low
- 		    _regs.offset = (_regs.offset & ~0xff) | value;
-		    break;
-		  default:
-		    break;
-		  };
-		break;
-	      default:
-		break;
-	      }
-	    res = true;
-	  }
-      }
-    return res;
-  }
+	bool receive(MessageIOOut &msg)
+	{
+		bool res = false;
+
+		for (unsigned i = 0; i < (1u << msg.type); i++) {
+			unsigned char value = uint8(msg.value >> i*8);
+
+			if (!in_range(msg.port + i, _iobase, 32))
+				continue;
+
+			Seoul::Lock::Guard guard(_lock);
+
+			switch (msg.port + i - _iobase) {
+			case 0x0: // attribute address and write
+			case 0x1: // attribute read
+			case 0x8: // dac address write mode
+			case 0x9: // dac data
+			case 0xe: // graphics controller address
+			case 0xf: // graphics controller data
+				break;
+			case 0x14: // crt address
+				_crt_index = value;
+				break;
+			case 0x15: // crt data
+				switch (_crt_index) {
+				case 0x0a: // cursor scanline start
+					_regs.cursor_style = uint16((value << 8) | (_regs.cursor_style & 0xff));
+					break;
+				case 0x0b: // cursor scanline end
+					_regs.cursor_style = uint16((_regs.cursor_style & ~0xff) | value);
+					break;
+				case 0x0e: // cursor location high
+					_regs.cursor_pos = TEXT_OFFSET + ((value << 8) | (_regs.cursor_pos & 0xff));
+					break;
+				case 0x0f: // cursor location low
+					_regs.cursor_pos = (_regs.cursor_pos & ~0xff) | value;
+					break;
+				case 0x0c: // start address high
+					_regs.offset = TEXT_OFFSET + ((value << 8) | (_regs.offset & 0xff));
+					break;
+				case 0x0d: // start address low
+					_regs.offset = (_regs.offset & ~0xff) | value;
+					break;
+				default:
+					break;
+				}
+				break;
+			default:
+				break;
+			}
+
+			res = true;
+		}
+
+		return res;
+	}
 
 
-  bool  receive(MessageIOIn &msg)
-  {
-    bool res = false;;
-    for (unsigned i = 0; i < (1u << msg.type); i++)
-      {
-	if (in_range(msg.port + i, _iobase, 32))
-	  {
-	    unsigned char value = ~0;
-	    switch (msg.port + i - _iobase)
-	      {
-	      case 0x14: // crt address
-		value = _crt_index;
-		break;
-	      case 0x13: // alias of crt data
-	      case 0x15: // crt data
-		switch (_crt_index)
-		  {
-		  case 0x0a: // cursor scanline start
-		    value = uint8(_regs.cursor_style >> 8);
-		    break;
-		  case 0x0b: // cursor scanline end
-		    value = uint8(_regs.cursor_style);
-		    break;
-		  case 0x0e: // cursor location high
-		    value = uint8((_regs.cursor_pos - TEXT_OFFSET) >> 8);
-		    break;
-		  case 0x0f: // cursor location low
-		    value = uint8((_regs.cursor_pos - TEXT_OFFSET));
-		    break;
-		  case 0x0c: // start addres high
-		    value = uint8((_regs.offset - TEXT_OFFSET) >> 8);
-		    break;
-		  case 0x0d: // start addres low
-		    value = uint8(_regs.offset);
-		    break;
-		  default:
-		    break;
-		  }
-		break;
-	      default:
-		break;
-	      }
-	    msg.value = (msg.value & ~(0xff << i*8)) | (value << i*8);
-	    res = true;
-	  }
-      }
-    return res;
-  }
+	bool receive(MessageIOIn &msg)
+	{
+		bool res = false;
+
+		for (unsigned i = 0; i < (1u << msg.type); i++) {
+			if (!in_range(msg.port + i, _iobase, 32))
+				continue;
+
+			Seoul::Lock::Guard guard(_lock);
+
+			unsigned char value = ~0;
+			switch (msg.port + i - _iobase) {
+			case 0x14: // crt address
+				value = _crt_index;
+				break;
+			case 0x13: // alias of crt data
+			case 0x15: // crt data
+				switch (_crt_index) {
+				case 0x0a: // cursor scanline start
+					value = uint8(_regs.cursor_style >> 8);
+					break;
+				case 0x0b: // cursor scanline end
+					value = uint8(_regs.cursor_style);
+					break;
+				case 0x0e: // cursor location high
+					value = uint8((_regs.cursor_pos - TEXT_OFFSET) >> 8);
+					break;
+				case 0x0f: // cursor location low
+					value = uint8((_regs.cursor_pos - TEXT_OFFSET));
+					break;
+				case 0x0c: // start addres high
+					value = uint8((_regs.offset - TEXT_OFFSET) >> 8);
+					break;
+				case 0x0d: // start addres low
+					value = uint8(_regs.offset);
+					break;
+				default:
+					break;
+				}
+
+				break;
+			default:
+				break;
+			}
+
+			msg.value = (msg.value & ~(0xff << i*8)) | (value << i*8);
+			res = true;
+		}
+
+		return res;
+	}
 
   bool  claim(MessageMem &msg)
   {
     return ((in_range(msg.phys, _framebuffer_phys, _framebuffer_size)) || (in_range(msg.phys, LOW_BASE, LOW_SIZE)));
   }
+
   bool  receive(MessageMem &msg)
   {
     unsigned *ptr;
