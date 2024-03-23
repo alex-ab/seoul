@@ -41,7 +41,7 @@ class Lapic : public DiscoveryHelper<Lapic>, public StaticReceiver<Lapic>
     int _regend { 0 };
 
   enum {
-    MAX_FREQ   = 200000000,
+    MAX_FREQ   = 200'000'000,
     LVT_MASK_BIT = 16,
     OFS_ISR   = 0,
     OFS_TMR   = 256,
@@ -782,10 +782,13 @@ public:
       : _mb(mb), _vcpu(vcpu), _initial_apic_id(initial_apic_id), _timer(timer), _restore_processed(false)
   {
     // find a FREQ that is not too high
-    for (_timer_clock_shift=0; _timer_clock_shift < 32; _timer_clock_shift++)
+    for (_timer_clock_shift = 0; _timer_clock_shift < 32; _timer_clock_shift++)
       if ((_mb.clock()->freq() >> _timer_clock_shift) <= MAX_FREQ) break;
 
-    Logging::printf("LAPIC freq %lld\n", _mb.clock()->freq() >> _timer_clock_shift);
+    if (false)
+      Logging::printf("LAPIC freq_shift %lld freq=%lld\n",
+                      _mb.clock()->freq() >> _timer_clock_shift, _mb.clock()->freq());
+
     CpuMessage msg[] = {
       // propagate initial APIC id
       CpuMessage(1,  1, 0xffffff, _initial_apic_id << 24),

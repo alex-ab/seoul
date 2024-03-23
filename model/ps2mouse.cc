@@ -267,8 +267,9 @@ class PS2Mouse : public StaticReceiver<PS2Mouse>
 					packet = 0x00aafa03;
 					break;
 				default:
-					Logging::printf("%s(%x, %x) unknown command\n",
-					                __PRETTY_FUNCTION__, msg.port, msg.value);
+					if (false)
+						Logging::printf("%s(%x, %x) unknown command\n",
+						                __PRETTY_FUNCTION__, msg.port, msg.value);
 
 					[[fallthrough]];
 

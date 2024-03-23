@@ -40,8 +40,8 @@ class ParentIrqProvider
 class AhciPort : public FisReceiver
 {
 #include "model/simplemem.h"
-  FisReceiver *_drive;
-  ParentIrqProvider *_parent;
+  FisReceiver       * _drive  { };
+  ParentIrqProvider * _parent { };
   unsigned _ccs;
   unsigned _inprogress;
   bool _need_initial_fis;
@@ -220,7 +220,7 @@ public:
   }
 
 
-  AhciPort() : _drive(0), _parent(0), _ccs(), _inprogress(), _need_initial_fis() { AhciPort_reset(); };
+  AhciPort() : _ccs(), _inprogress(), _need_initial_fis() { AhciPort_reset(); };
 
   virtual ~AhciPort() { }
 };
@@ -383,27 +383,34 @@ class AhciController : public ParentIrqProvider,
 		if (!(PCI_CMD_STS & 0x2))
 			return false;
 
-		assert(!(addr & 0x3));
-
-		bool     res    = false;
+		bool     ok     = false;
 		unsigned uvalue = 0;
 
-		if (access_ctrl)
-			res = msg.read ? AhciController_read (unsigned(addr), uvalue)
-			               : AhciController_write(unsigned(addr), *msg.ptr);
-		else
+		if (access_ctrl) {
+			assert(!(addr & 0x3));
+
+			ok = msg.read ? AhciController_read (unsigned(addr), uvalue)
+			              : AhciController_write(unsigned(addr), *msg.ptr);
+
+			/* suppress write errors, if written value is same as in register */
+			if (!ok && !msg.read) {
+				ok = AhciController_read (unsigned(addr), uvalue);
+				if (ok && uvalue != *msg.ptr)
+					ok = false;
+			}
+		} else
 		if (access_ports) {
 			auto & port = _ports[(addr - 0x100) / 0x80];
 
 			Seoul::Lock::Guard guard(port._lock);
 
-			res = msg.read ? port.AhciPort_read (addr & 0x7f, uvalue)
-			               : port.AhciPort_write(addr & 0x7f, *msg.ptr);
+			ok = msg.read ? port.AhciPort_read (addr & 0x7f, uvalue)
+			              : port.AhciPort_write(addr & 0x7f, *msg.ptr);
 		}
 
-		if (res && msg.read)
+		if (ok && msg.read)
 			*msg.ptr = uvalue;
-		else if (!res)
+		else if (!ok)
 			Logging::printf("%s(%zx) %s failed\n", __PRETTY_FUNCTION__,
 			                size_t(addr), msg.read ? "read" : "write");
 

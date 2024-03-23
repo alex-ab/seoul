@@ -156,7 +156,9 @@ private:
 
 	  // copy in the tag
 	  if (!msg.vcpu->copy_in(cpu->es.base + cpu->di, &v, 4)) return false;
-	  Logging::printf("VESA %x tag %x base %zx+%x esi %x\n", cpu->eax, v.tag, size_t(cpu->es.base), cpu->di, cpu->esi);
+
+	  if (false)
+		Logging::printf("VESA %x tag %x base %zx+%x esi %x\n", cpu->eax, v.tag, size_t(cpu->es.base), cpu->di, cpu->esi);
 
 	  // we support VBE 2.0
 	  v.version = 0x0200;
@@ -208,7 +210,8 @@ private:
 	  if (index != ~0u && info.attr & 1)
 	    {
 	      // ok, we have the mode -> set it
-	      Logging::printf("VESA %x base %zx+%x esi %x mode %x\n", cpu->eax, size_t(cpu->es.base), cpu->di, cpu->esi, index);
+	      if (false)
+		      Logging::printf("VESA %x base %zx+%x esi %x mode %x\n", cpu->eax, size_t(cpu->es.base), cpu->di, cpu->esi, index);
 
 	      // clear buffer
 	      if (~cpu->ebx & 0x8000)  memset(framebuffer_ptr(), 0, _framebuffer_size);
@@ -241,7 +244,7 @@ private:
           return false;
         }
 
-        Logging::printf("vesa: flat panel info %ux%u\n",
+        Logging::printf("VESA: flat panel info %ux%u\n",
                         pref.info->resolution[0],
                         pref.info->resolution[1]);
 
@@ -672,7 +675,9 @@ public:
     if (!mb.bus_console.send(msg))
       Logging::panic("could not alloc a VGA backend");
     _view = msg.view;
-    Logging::printf("VGA console %x+%zx %zx\n", _framebuffer_phys, _framebuffer_size, _framebuffer_ptr);
+
+    if (false)
+      Logging::printf("VGA console %x+%zx %zx\n", _framebuffer_phys, _framebuffer_size, _framebuffer_ptr);
 
     // switch to our console
     msg.type = MessageConsole::TYPE_SWITCH_VIEW;

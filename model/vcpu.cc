@@ -37,20 +37,15 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
   volatile unsigned _sipi;
   unsigned long _intr_hint { 0 };
 
+  #define DEBUG_IOEXITS 0
+
+  #if DEBUG_IOEXITS
   unsigned char debugioin[8192];
   unsigned char debugioout[8192];
+  #endif
 
   bool _amd   { };
   bool _intel { };
-
-  void dprintf(const char *format, ...) {
-    Logging::printf("[%2d] ", CPUID_EDXb);
-    va_list ap;
-    va_start(ap, format);
-    Logging::vprintf(format, ap);
-    va_end(ap);
-
-  }
 
   void GP0(CpuMessage &msg) {
     msg.cpu->inj_info = 0x80000b0d;
@@ -264,7 +259,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       msg.cpu->edx_eax(0);
       break;
     case 0x277:
-      dprintf("IA32_PAT_MSR rdmsr %x at %x\n",  msg.cpu->ecx, msg.cpu->eip);
+      Logging::printf("[%u] IA32_PAT_MSR rdmsr %x at %x\n",
+                      CPUID_EDXb, msg.cpu->ecx, msg.cpu->eip);
       msg.cpu->edx_eax(0x0007040600070406ull);
       break;
     case IA32_BIOS_SIGN_ID:
@@ -292,7 +288,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       break;
 #endif
     default:
-      dprintf("unsupported rdmsr %x at %x\n",  msg.cpu->ecx, msg.cpu->eip);
+      Logging::printf("[%u] unsupported rdmsr %x at %x\n",
+                      CPUID_EDXb, msg.cpu->ecx, msg.cpu->eip);
       msg.cpu->edx_eax(0);
       //GP0(msg);
     }
@@ -370,7 +367,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         msg.mtr_out |= MTD_SYSENTER;
         break;
       case 0x1d9: /* debug ctl - unsupported */
-        dprintf("unsupported wrmsr debug ctl\n");
+        Logging::printf("[%u] unsupported wrmsr debug ctl\n", CPUID_EDXb);
         break;
 #ifdef __x86_64__
       case 0xc0000080:
@@ -422,9 +419,9 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         break;
 #endif
       default:
-        dprintf("unsupported wrmsr %x <-(%x:%x) at %lx\n",
-                cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
-        GP0(msg);
+        Logging::printf("[%u] unsupported wrmsr %x <-(%x:%x) at %lx\n",
+                        CPUID_EDXb, cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
+        //GP0(msg);
       }
   }
 
@@ -488,10 +485,14 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     msg.mtr_out  |= MTD_ALL & ~(MTD_R8_R15 | MTD_SYSCALL_SWAPGS);
     if (reset) {
-      Logging::printf("reset CPU from %x mtr_in %x\n", msg.type, msg.mtr_in);
+      if (false)
+        Logging::printf("[%u] reset CPU from %x mtr_in %x\n",
+                        CPUID_EDXb, msg.type, msg.mtr_in);
 
+      #if DEBUG_IOEXITS
       memset(debugioin , 0, sizeof(debugioin));
       memset(debugioout, 0, sizeof(debugioout));
+      #endif
       // XXX reset TSC
       // XXX floating point
       // XXX MXCSR
@@ -528,7 +529,8 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     if (old_event & (EVENT_DEBUG | EVENT_HOST)) {
       if (old_event & EVENT_DEBUG)
-        dprintf("state %x event %8x eip %8x eax %x ebx %x edx %x esi %x\n", cpu->actv_state, old_event, cpu->eip, cpu->eax, cpu->ebx, cpu->edx, cpu->esi);
+        Logging::printf("[%u] state %x event %8x eip %8x eax %x ebx %x edx %x esi %x\n",
+                        CPUID_EDXb, cpu->actv_state, old_event, cpu->eip, cpu->eax, cpu->ebx, cpu->edx, cpu->esi);
       else
         if (cpu->actv_state == 1) cpu->actv_state = 0; //if cpu is in hlt wake it up
       Cpu::atomic_and<volatile unsigned>(&_event, ~(old_event & (EVENT_DEBUG | EVENT_HOST)));
@@ -568,7 +570,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     // SMI
     if (old_event & EVENT_SMI && ~cpu->intr_state & 4) {
-      dprintf("SMI received\n");
+      Logging::printf("[%u] SMI received\n", CPUID_EDXb);
       Cpu::atomic_and<volatile unsigned>(&_event, ~VCpu::EVENT_SMI);
       cpu->actv_state = 0;
       // fall trough
@@ -579,7 +581,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     // NMI
     if (old_event & EVENT_NMI && ~cpu->intr_state & 8 && !(cpu->intr_state & 3)) {
-      Logging::printf("inject NMI %x\n", old_event);
+      Logging::printf("[%u] inject NMI %x\n", CPUID_EDXb, old_event);
       cpu->inj_info = 0x80000202;
       cpu->actv_state = 0;
       Cpu::atomic_and<volatile unsigned>(&_event, ~VCpu::EVENT_NMI);
@@ -628,10 +630,15 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     Cpu::move(msg.dst, &msg2.value, msg.io_order);
     msg.mtr_out |= MTD_GPR_ACDB;
 
+    #if DEBUG_IOEXITS
     if (!res && ~debugioin[msg.port >> 3] & (1u << (msg.port & 7))) {
       debugioin[msg.port >> 3] |= uint8(1u << (msg.port & 7));
-      //dprintf("could not read from ioport %x eip %x cs %x-%x\n", msg.port, msg.cpu->eip, msg.cpu->cs.base, msg.cpu->cs.ar);
+      Logging::printf("[%u] could not read from ioport %x eip %x cs %x-%x\n",
+                      CPUID_EDXb, msg.port, msg.cpu->eip, msg.cpu->cs.base, msg.cpu->cs.ar);
     } else msg.consumed = 1;
+    #else
+    msg.consumed = 1;
+    #endif
   }
 
 
@@ -640,10 +647,16 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     Cpu::move(&msg2.value, msg.dst, msg.io_order);
 
     bool res = _mb.bus_ioout.send(msg2);
+
+    #if DEBUG_IOEXITS
     if (!res && ~debugioout[msg.port >> 3] & (1 << (msg.port & 7))) {
       debugioout[msg.port >> 3] |= uint8(1u << (msg.port & 7));
-      //dprintf("could not write %x to ioport %x eip %x\n", msg.cpu->eax, msg.port, msg.cpu->eip);
+      Logging::printf("[%u] could not write %x to ioport %x eip %x\n",
+                      CPUID_EDXb, msg.cpu->eax, msg.port, msg.cpu->eip);
     } else msg.consumed = 1;
+    #else
+    msg.consumed = 1;
+    #endif
   }
 
   /**
