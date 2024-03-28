@@ -41,6 +41,7 @@ public:
     TEXT_OFFSET = 0x18000 >> 1,
     EBDA_FONT_OFFSET = 0x1000,
     CONSOLE_ID = 0,
+    VIEW_ID = 0,
   };
 private:
   Seoul::Lock    _lock { };
@@ -71,7 +72,7 @@ private:
     update_cursor(0, ((pos / 80) << 8) | (pos % 80));
 
     if (update) {
-        MessageConsole msg2(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+        MessageConsole msg2(CONSOLE_ID, VIEW_ID);
         _mb.bus_console.send(msg2);
     }
   }
@@ -221,7 +222,7 @@ private:
 	      _vbe_mode = cpu->ebx;
 
 	      /* notify about vga/vesa switch */
-	      MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+	      MessageConsole msg(CONSOLE_ID, VIEW_ID);
 	      _mb.bus_console.send(msg);
 	      break;
 	    }
@@ -304,7 +305,7 @@ private:
 	      else
 		base[row*80 + col] = base[(row + rows)*80 + col];
 
-	  MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+	  MessageConsole msg(CONSOLE_ID, VIEW_ID);
 	  _mb.bus_console.send(msg);
 	}
 	break;
@@ -328,7 +329,7 @@ private:
 		if (cpu->ah & 1) framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 1] = cpu->bl;
 		framebuffer_ptr()[2*(TEXT_OFFSET + offset) + 0] = cpu->al;
 
-		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+		MessageConsole msg(CONSOLE_ID, VIEW_ID);
 		_mb.bus_console.send(msg);
 	    }
 	  }
@@ -345,7 +346,7 @@ private:
 	  update_cursor(cpu->bh, ((pos / 80) << 8) | (pos % 80));
 
 	  if (update) {
-		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, CONSOLE_ID);
+		MessageConsole msg(CONSOLE_ID, VIEW_ID);
 		_mb.bus_console.send(msg);
 	  }
 	}

@@ -177,6 +177,16 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		bool                  _memory_pressure { };
 		bool const            _verbose;
 
+		/*
+		 * heuristic to hide window when exiting to vga/vesa console
+		 * when used with linux cmdline: vga=0x318
+		 */
+		enum {
+			HEURISTIC_UNDEFINED,
+			HEURISTIC_DISABLE_SCANOUT,
+			HEURISTIC_ENABLE_SCANOUT,
+		} _heuristic_hide { HEURISTIC_UNDEFINED };
+
 		~Virtio_gpu();
 
 		struct resource_2d {
@@ -360,12 +370,17 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		Virtio_gpu(DBus<MessageIrqLines>  &bus_irqlines,
 		           DBus<MessageMemRegion> &bus_memregion,
 		           DBus<MessageConsole>   &bus_console,
-		           unsigned char irq, unsigned short bdf, bool verbose)
+		           uint64 const bar_addr,
+		           uint8  const irq_pin,
+		           uint8  const irq_line,
+		           uint16 const bdf,
+		           bool   const verbose)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
+			Virtio::Device(bus_irqlines, bus_memregion, irq_pin,
+			               irq_line, bdf,
 			               16            /* virtio type */,
 			               0x03800001,   /* display + GPU + rev 1 */
-			               0xf7a80000ull /* phys bar address XXX */,
+			               bar_addr,
 			               2             /* queues */),
 			_bus_console(bus_console),
 			_verbose(verbose)
@@ -543,9 +558,8 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				auto const request_size = descriptor.len;
 
 #if 0
-				Logging::printf(".... %lx+%zu -> %lx+%zu\n",
-				                request, request_size,
-				                response, response_size);
+				Logging::printf(".... %lx+%x\n",
+				                request, request_size);
 #endif
 
 				if (!request || request_size < 24) {
@@ -562,10 +576,9 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 					return 0UL;
 				}
 
-#if 0
-				Logging::printf("gpu, type %x flags=%x fence=%llx \n",
-				                header->type, header->flags, header->fence_id);
-#endif
+				if (_verbose)
+					Logging::printf("gpu, type %x flags=%x fence=%llx \n",
+					                header->type, header->flags, header->fence_id);
 
 				uintptr_t response = 0; size_t response_size = 0;
 				uintptr_t desc2 = 0; size_t desc2_size = 0;
@@ -634,6 +647,32 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		uint32 dev_feature     (unsigned)         override { return 0u; }
 		void   drv_feature_ack (unsigned, uint32) override { }
 		uint32 drv_feature     (unsigned)         override { return 0u; }
+
+		void notify_power(unsigned value) override
+		{
+			Logging::printf("virtio_gpu: power change %x\n", value);
+
+			if ((value & 3) == 0) {
+				/* reset */
+/*
+				_config = { };
+				reset_resources();
+				reset();
+//				reset_queues();
+*/
+			}
+
+			if (!host_fb || (value & 3) != 3)
+				return;
+
+			memset((void *)host_fb, 0, mode_host.width * mode_host.height * 4);
+
+			MessageConsole msg(console_id, 0 /* view */, false /* hide */,
+			                   { 0, 0 },
+			                   { mode_host.width, mode_host.height });
+
+			_bus_console.send(msg);
+		}
 };
 
 size_t Virtio_gpu::_gpu_display_info(uintptr_t const in,  size_t const in_size,
@@ -781,6 +820,11 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 				return;
 			}
 
+			bool calc_sum = _heuristic_hide == HEURISTIC_ENABLE_SCANOUT &&
+			                !flush.r.x && flush.r.width  == mode_host.width &&
+			                !flush.r.y && flush.r.height == mode_host.height;
+			uint64 sum = 0;
+
 			for (unsigned y = flush.r.y; y < flush.r.y + flush.r.height; y ++) {
 
 				if (y >= mode_host.height)
@@ -796,16 +840,25 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 				memcpy(reinterpret_cast<void *>(host_fb + y * vmm_stride + flush.r.x * 4),
 				       reinterpret_cast<void *>(uintptr_t(resource.memory_vmm) + y * guest_stride + flush.r.x * 4),
 				       width_cpy * 4);
+
+				if (calc_sum) {
+					for (unsigned i = 0; i < width_cpy * 4; i += 4)
+						sum += *reinterpret_cast<uint32 *>(host_fb + y * vmm_stride + flush.r.x * 4 + i);
+				}
 			}
 
-			MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, console_id);
-			msg.view   = 0;
-			msg.x      = flush.r.x;
-			msg.y      = flush.r.y;
-			msg.width  = flush.r.width;
-			msg.height = flush.r.height;
-			msg.hot_x  = 0;
-			msg.hot_y  = 0;
+			if (calc_sum && !sum)
+				Logging::printf("virtio_gpu: hide window");
+
+			if ((!calc_sum && _heuristic_hide != HEURISTIC_UNDEFINED) || sum)
+				_heuristic_hide = HEURISTIC_UNDEFINED;
+
+			auto const hide = calc_sum && !sum;
+			auto const view = 0;
+
+			MessageConsole msg(console_id, view, hide,
+			                   { flush.r.x, flush.r.y },
+			                   { flush.r.width, flush.r.height });
 
 			_bus_console.send(msg);
 		});
@@ -834,6 +887,14 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 			                scanout.r.width, scanout.r.height,
 			                scanout.scanout_id,
 			                scanout.resource_id == 0 ? "disable" : "enable");
+
+		if (scanout.resource_id == 0)
+			_heuristic_hide = HEURISTIC_DISABLE_SCANOUT;
+		else
+		if (scanout.resource_id) {
+			if (_heuristic_hide == HEURISTIC_DISABLE_SCANOUT)
+				_heuristic_hide = HEURISTIC_ENABLE_SCANOUT;
+		}
 
 		/* XXX resource_id == 0 -> disable - how to handle XXX */
 		apply_to_resource_2d(scanout.resource_id, [&](auto &resource) {
@@ -925,14 +986,12 @@ size_t Virtio_gpu::_gpu_cursor(uintptr_t const in,  size_t const in_size,
 			}
 		}
 
-		MessageConsole msg(MessageConsole::TYPE_CONTENT_UPDATE, console_id);
-		msg.view   = 1;
-		msg.x      = VMM_MIN(cursor.pos.x, mode_host.width);
-		msg.y      = VMM_MIN(cursor.pos.y, mode_host.height);
-		msg.width  = resource.width;
-		msg.height = resource.height;
-		msg.hot_x  = cursor.hot_x;
-		msg.hot_y  = cursor.hot_y;
+
+		MessageConsole msg(console_id, 1 /* view */, false /* hide */,
+		                   { VMM_MIN(cursor.pos.x, mode_host.width ),
+		                     VMM_MIN(cursor.pos.y, mode_host.height) },
+		                   { resource.width, resource.height },
+		                   { cursor.hot_x, cursor.hot_y });
 
 		_bus_console.send(msg);
 	});
@@ -1115,19 +1174,26 @@ size_t Virtio_gpu::_gpu_move_to_host(uintptr_t const in,  size_t const in_size,
 }
 
 PARAM_HANDLER(virtio_gpu,
-	      "virtio_gpu:bdf,irq - attach an virtio gpu device to the PCI bus",
-	      "Example: 'virtio_gpu:,13'.",
+	      "virtio_gpu:mem,bdf - attach an virtio gpu device to the PCI bus",
+	      "Example: 'virtio_gpu:0xe0400000,0x30' to attach on 00:06.0 on address",
 	      "If no bdf is given a free one is used.")
 {
 	bool const verbose = false;
 
-	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_gpu: invalid bdf\n");
 
+	auto const irq_pin  =  2; /* PCI INTB# */
+	auto const irq_line = 10; /* defined by acpicontroller dsdt INTB# */
+	auto const bar_base = argv[0];
+
+	if (argv[0] == ~0UL)
+		Logging::panic("virtio_gpu: missing bar address");
+
 	Virtio_gpu *dev = new Virtio_gpu(mb.bus_irqlines, mb.bus_memregion,
-	                                 mb.bus_console, uint8(argv[1]),
-	                                 uint16(bdf), verbose);
+	                                 mb.bus_console, bar_base, irq_pin,
+	                                 irq_line, uint16(bdf), verbose);
 
 	mb.bus_pcicfg .add(dev, Virtio_gpu::receive_static<MessagePciConfig>);
 	mb.bus_mem    .add(dev, Virtio_gpu::receive_static<MessageMem>);

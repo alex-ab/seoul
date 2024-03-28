@@ -442,11 +442,23 @@ struct MessageConsole
       unsigned height;
       unsigned hot_x;
       unsigned hot_y;
+      bool     hide;
     };
   };
-  MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id) : type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}
-  MessageConsole(Type _type, unsigned short _id, size_t _size = 0, char * _ptr = nullptr, VgaRegs *_regs = nullptr)
-    : type(_type), id(_id), view(0), ptr(_ptr), size(_size), regs(_regs) {}
+
+	struct Pair { unsigned a; unsigned b;};
+
+	MessageConsole(unsigned _index, ConsoleModeInfo *_info, unsigned short _id)
+	: type(TYPE_GET_MODEINFO), id(_id), view(0), index(_index), info(_info) {}
+
+	MessageConsole(Type _type, unsigned short _id, size_t _size = 0, char * _ptr = nullptr, VgaRegs *_regs = nullptr)
+	: type(_type), id(_id), view(0), ptr(_ptr), size(_size), regs(_regs) {}
+
+	MessageConsole(uint16 _id, uint16 v, bool hide = false,
+	               Pair cord = { }, Pair size = { }, Pair hot = { })
+	: type(TYPE_CONTENT_UPDATE), id(_id), view(v),
+	  x(cord.a), y(cord.b), width(size.a), height(size.b),
+	  hot_x(hot.a), hot_y(hot.b), hide(hide) { }
 };
 
 
@@ -506,6 +518,7 @@ struct MessageHostOp
       OP_GET_CONFIG_STRING,
       OP_MIGRATION_RETRIEVE_INIT,
       OP_MIGRATION_START,
+      OP_VM_OFF,
     } type;
   union {
     unsigned long value;

@@ -349,12 +349,16 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		             DBus<MessageMemRegion> &bus_memregion,
 		             DBus<MessageAudio>     &bus_audio,
 		             Clock                  &clock,
-		             unsigned char irq, unsigned short bdf)
+		             uint64 const bar_addr,
+		             uint8  const irq_pin,
+		             uint8  const irq_line,
+		             uint16 const bdf)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
+			Virtio::Device(bus_irqlines, bus_memregion, irq_pin,
+			               irq_line, bdf,
 			               25 /* virtio type */,
 			               0x04030001, /* pci class (multimedia), subclass (audio) */
-			               0xf7a90000ull /* phys bar address XXX */,
+			               bar_addr,
 			               4 /* queues */),
 			_bus_audio(bus_audio),
 			_clock(clock)
@@ -740,6 +744,8 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		uint32 dev_feature     (unsigned)         override { return 0u; }
 		void   drv_feature_ack (unsigned, uint32) override { }
 		uint32 drv_feature     (unsigned)         override { return 0u; }
+
+		void notify_power(unsigned) override { }
 };
 
 size_t Virtio_sound::_jack_info(uintptr_t const in,  size_t const in_size,
@@ -892,17 +898,24 @@ size_t Virtio_sound::_chmap_info(uintptr_t const in,  size_t const in_size,
 }
 
 PARAM_HANDLER(virtio_sound,
-	      "virtio_sound:bdf,irq - attach an virtio sound to the PCI bus",
-	      "Example: 'virtio_sound:,15'.",
+	      "virtio_sound:mem,bdf - attach an virtio sound to the PCI bus",
+	      "Example: 'virtio_sound:0xe0600000,0x30' to attach on 00:06.0 on address",
 	      "If no bdf is given a free one is used.")
 {
-	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_sound: bdf invalid\n");
 
+	auto const irq_pin  =  4; /* PCI INTD# */
+	auto const irq_line = 13; /* defined by acpicontroller dsdt for INTD# */
+	auto const bar_base = argv[0];
+
+	if (argv[0] == ~0UL)
+		Logging::panic("virtio_gpu: missing bar address");
+
 	Virtio_sound *dev = new Virtio_sound(mb.bus_irqlines, mb.bus_memregion,
-	                                     mb.bus_audio,
-	                                     *mb.clock(), uint8(argv[1]),
+	                                     mb.bus_audio, *mb.clock(),
+	                                     bar_base, irq_pin, irq_line,
 	                                     uint16(bdf));
 
 	mb.bus_pcicfg.add(dev, Virtio_sound::receive_static<MessagePciConfig>);

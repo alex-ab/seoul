@@ -1123,7 +1123,7 @@ public:
 };
 
 PARAM_HANDLER(intel82576vf,
-	      "intel82576vf:[promisc][,mem_mmio][,mem_msix][,txpoll_us][,rx_map][,verbose] - attach an Intel 82576VF to the PCI bus.",
+	      "intel82576vf:[promisc],mem_mmio,mem_msix[,txpoll_us][,rx_map][,verbose] - attach an Intel 82576VF to the PCI bus.",
 	      "promisc   - if !=0, be always promiscuous (use for Linux VMs that need it for bridging) (Default 1)",
 	      "txpoll_us - if !=0, map TX registers to guest and poll them every txpoll_us microseconds. (Default 0)",
 	      "rx_map    - if !=0, map RX registers to guest. (Default: Yes)",
@@ -1136,7 +1136,12 @@ PARAM_HANDLER(intel82576vf,
 	if (!mb.bus_hostop.send(msg))
 		Logging::panic("Could not get a MAC address");
 
-	uint32 mem_mmio = (argv[1] == ~0UL) ? 0xF7CE0000 : unsigned(argv[1]);
+	if (argv[1] == ~0UL)
+		Logging::panic("intel82576vf: missing bar 0 address");
+	if (argv[2] == ~0UL)
+		Logging::panic("intel82576vf: missing bar 3 address");
+
+	uint32 mem_mmio = unsigned(argv[1]);
 
 	MessageHostOp msg_mmio(MessageHostOp::OP_ALLOC_IOMEM,
 	                       mem_mmio + MAP_OFFSET, 2 * 0x1000);
@@ -1148,7 +1153,7 @@ PARAM_HANDLER(intel82576vf,
 				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
 				       mb.clock(), mb.bus_timer,
 				       mem_mmio, reinterpret_cast<uint32 *>(msg_mmio.ptr),
-				       (argv[2] == ~0UL) ? 0xF7CC0000UL : unsigned(argv[2]),
+				       unsigned(argv[2]),
 				       (argv[3] == ~0UL) ? 0UL : unsigned(argv[3]),
 				       argv[4],
 				       PciHelper::find_free_bdf(mb.bus_pcicfg, ~0U),

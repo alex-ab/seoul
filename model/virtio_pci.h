@@ -24,15 +24,15 @@
 
 
 namespace Virtio {
-	struct Pci_cap;
+	struct Vendor_cap;
+	struct Power_cap;
 	class  Device;
 }
 
-struct Virtio::Pci_cap
+struct Virtio::Vendor_cap
 {
-	struct layout
+	struct Layout
 	{
-		enum { VENDOR = 9 };
 		enum Types { COMMON_CFG = 1, NOTIFY_CFG = 2, ISR_CFG = 3, DEVICE_CFG = 4 };
 
 		union {
@@ -49,18 +49,20 @@ struct Virtio::Pci_cap
 	unsigned bar;
 	unsigned offset;
 	unsigned length;
-	layout   cap { };
+	Layout   cap { };
 
-	Pci_cap(uint8 next_cap, layout::Types type, unsigned bar,
-	        unsigned offset, unsigned length)
+	Vendor_cap(uint8 next_cap, Layout::Types type,
+	        unsigned bar, unsigned offset, unsigned length)
 	:
 		bar(bar), offset(offset), length(length)
 	{
-		cap.id   = layout::VENDOR;
+		enum { VENDOR = 9 };
+
+		cap.id   = VENDOR;
 		cap.next = next_cap;
 		cap.len  = 4 * 4; /* e.g. [0x40 - 0x50) */
 		cap.type = type;
-	 }
+	}
 
 	unsigned read(unsigned const off) const
 	{
@@ -75,6 +77,53 @@ struct Virtio::Pci_cap
 			return length;
 		default:
 			return ~0U;
+		}
+	}
+};
+
+struct Virtio::Power_cap
+{
+	struct {
+		union {
+			struct {
+				uint8 id;
+				uint8 next;
+				uint8 len;
+				uint8 unused;
+			};
+			struct { uint32 value; };
+		};
+	} cap { };
+
+	unsigned rest { };
+
+	Power_cap(uint8 next_cap)
+	{
+		enum { POWER = 1 };
+		cap.id   = POWER;
+		cap.next = next_cap;
+		cap.len  = 8;
+	}
+
+	unsigned read(unsigned const off) const
+	{
+		switch (off) {
+		case 0:
+			return cap.value;
+		case 4:
+			return rest;
+		default:
+			return ~0U;
+		}
+	}
+
+	void write(unsigned const off, unsigned value)
+	{
+		switch (off) {
+		case 4:
+			rest = value; break;
+		default:
+			break;
 		}
 	}
 };
@@ -102,13 +151,16 @@ class Virtio::Device
 			VIRTIO_QUEUE_SIZE = 512
 		};
 
+		uint8  const _pin;
 		uint8  const _irq;
 		uint8  const _device_type;
 		uint32 const _pci_type; /* class code, sub class, prog if, rev. id */
 		uint8  const _queues_count;
 
 		uint16 const _bdf;
-		uint64 const _phys_bar_base;
+		uint64       _phys_bar_base;
+
+		Power_cap    _power { 0x50 };
 
 		bool         _bar0_size      { false };
 		bool         _all_notify     { false };
@@ -168,7 +220,7 @@ class Virtio::Device
 		{
 			MessageMemRegion mem_region(uintptr_t(req_addr >> 12));
 			if (!_bus_memregion.send(mem_region, false) || !mem_region.ptr) {
-				Logging::printf("Invalid guest physical address %llx+%lx\n",
+				Logging::printf("Invalid guest physical address A %llx+%lx\n",
 				                req_addr, req_size);
 				return 0;
 			}
@@ -179,7 +231,7 @@ class Virtio::Device
 			if ((req_addr <  guest_base) ||
 			    (req_addr >= guest_base + guest_size) ||
 			    req_size == 0 || req_addr + req_size >= guest_base + guest_size) {
-				Logging::printf("Invalid guest physical address %llx+%lx\n",
+				Logging::printf("Invalid guest physical address B %llx+%lx\n",
 				                req_addr, req_size);
 				return 0;
 			}
@@ -187,7 +239,8 @@ class Virtio::Device
 			return uintptr_t(mem_region.ptr) + uintptr_t(req_addr - guest_base);
 		}
 
-		virtual void   notify  (unsigned) = 0;
+		virtual void notify      (unsigned) = 0;
+		virtual void notify_power(unsigned) = 0;
 
 		virtual uint32 dev_feature     (unsigned)         = 0;
 		virtual void   drv_feature_ack (unsigned, uint32) = 0;
@@ -234,13 +287,13 @@ class Virtio::Device
 
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
 		       DBus<MessageMemRegion> &bus_memregion,
-		       unsigned char const irq, unsigned short const bdf,
+		       uint8 const pin, uint8 const _irq, unsigned short const bdf,
 		       uint8 const device_type, uint32 const pci_class,
 		       uint64 const phys_bar_base, uint8 const queues_count)
 		:
 			_bus_irqlines(bus_irqlines), _bus_memregion(bus_memregion),
-			_irq(irq), _device_type(device_type), _pci_type(pci_class),
-			_queues_count(queues_count), _bdf(bdf),
+			_pin(pin), _irq(_irq), _device_type(device_type),
+			_pci_type(pci_class), _queues_count(queues_count), _bdf(bdf),
 			_phys_bar_base(phys_bar_base)
 		{ }
 
@@ -262,6 +315,11 @@ class Virtio::Device
 			_queue_select      = 0u;
 			_config_generation = 0u;
 
+			reset_queues();
+		}
+
+		void reset_queues()
+		{
 			for (unsigned i = 0; i < QUEUES_MAX; i++) {
 				_queues[i].queue_size = VIRTIO_QUEUE_SIZE;
 				for (unsigned j = 0; j < sizeof(_queues)/sizeof(_queues[0]); j++)
@@ -304,44 +362,45 @@ class Virtio::Device
 				case 0x2c: /* subsystem ID, system vendor ID */
 					msg.value = 0x11101AF4u;
 					break;
-				case 0x30: /* expansion ROM addr */
-					msg.value = 0;
-					break;
 				case 0x34: /* capability pointer */
 					msg.value = 0x40;
 					break;
 				case 0x3c: /* max lat, min grant, intr pin, intr line */
-					msg.value = 0x100u | unsigned(_irq);
+					msg.value = (unsigned(_pin) << 8) | unsigned(_irq);
 					break;
-				case 0x40 ... 0x4c:
-				{
-					Pci_cap cap(0x50, Pci_cap::layout::Types::COMMON_CFG,
-					            BAR_ID, 0, RANGE_SIZE);
-					msg.value = cap.read(msg.dword * 4 - 0x40);
+				case 0x40 ... 0x44: {
+					msg.value = _power.read(msg.dword * 4 - 0x40);
 					break;
 				}
 				case 0x50 ... 0x5c:
 				{
-					Pci_cap cap(0x60, Pci_cap::layout::Types::ISR_CFG,
-					            BAR_ID, BAR_OFFSET_ISR, RANGE_SIZE);
+					Vendor_cap cap(0x60, Vendor_cap::Layout::Types::COMMON_CFG,
+					               BAR_ID, 0, RANGE_SIZE);
 					msg.value = cap.read(msg.dword * 4 - 0x50);
 					break;
 				}
 				case 0x60 ... 0x6c:
 				{
-					Pci_cap cap(0x70, Pci_cap::layout::Types::DEVICE_CFG,
-					            BAR_ID, BAR_OFFSET_CONFIG, RANGE_SIZE);
+					Vendor_cap cap(0x70, Vendor_cap::Layout::Types::ISR_CFG,
+					               BAR_ID, BAR_OFFSET_ISR, RANGE_SIZE);
 					msg.value = cap.read(msg.dword * 4 - 0x60);
 					break;
 				}
 				case 0x70 ... 0x7c:
 				{
-					Pci_cap cap(0x00, Pci_cap::layout::Types::NOTIFY_CFG,
-					            BAR_ID, BAR_OFFSET_NOTIFY, RANGE_SIZE);
+					Vendor_cap cap(0x80, Vendor_cap::Layout::Types::DEVICE_CFG,
+					               BAR_ID, BAR_OFFSET_CONFIG, RANGE_SIZE);
 					msg.value = cap.read(msg.dword * 4 - 0x70);
 					break;
 				}
-				case 0x80: /* part of NOTIFY_CFG -> notify_off_multiplier */
+				case 0x80 ... 0x8c:
+				{
+					Vendor_cap cap(0x00, Vendor_cap::Layout::Types::NOTIFY_CFG,
+					               BAR_ID, BAR_OFFSET_NOTIFY, RANGE_SIZE);
+					msg.value = cap.read(msg.dword * 4 - 0x80);
+					break;
+				}
+				case 0x90: /* part of NOTIFY_CFG -> notify_off_multiplier */
 					msg.value = _all_notify ? 0 : NOTIFY_OFF_MULTIPLIER;
 					break;
 				default:
@@ -350,8 +409,9 @@ class Virtio::Device
 				}
 
 				if (show)
-					Logging::printf("virtio PCI read  %x -> %x\n",
-					                msg.dword * 4, msg.value);
+					Logging::printf("%x:%x.%u virtio PCI read  %x -> %x\n",
+					                (_bdf >> 8) & 0xff, (_bdf >> 3) & 0x1f,
+					                _bdf & 0x7, msg.dword * 4, msg.value);
 				break;
 			case MessagePciConfig::TYPE_WRITE:
 				switch (msg.dword*4) {
@@ -361,12 +421,21 @@ class Virtio::Device
 				case 0x10: /* BAR0 */
 					if (msg.value == ~0U)
 						_bar0_size = true;
+					else
+						_phys_bar_base = msg.value;
+					break;
+				case 0x44: /* PCI power cap, 2nd half */
+					_power.write(4, msg.value);
+					notify_power(_power.read(4));
+					break;
+				default:
 					break;
 				}
 
 				if (show)
-					Logging::printf("virtio PCI write %x <- %x\n",
-					                msg.dword * 4, msg.value);
+					Logging::printf("%x:%x.%u virtio PCI write %x <- %x\n",
+					                (_bdf >> 8) & 0xff, (_bdf >> 3) & 0x1f,
+					                _bdf & 0x7, msg.dword * 4, msg.value);
 				break;
 			case MessagePciConfig::TYPE_PTR:
 				Logging::printf("virtio PCI ptr unsupported !\n");
@@ -516,8 +585,9 @@ class Virtio::Device
 			}
 
 			if (msg.read && show)
-				Logging::printf("Messagemem %llx status %x %s msg.value=%x\n",
-				                msg.phys, _control & 2,
+				Logging::printf("%x:%x.%u Messagemem %llx status %x %s msg.value=%x\n",
+				                (_bdf >> 8) & 0xff, (_bdf >> 3) & 0x1f,
+				                _bdf & 0x7, msg.phys, _control & 2,
 				                msg.read ? "read " : "write", *msg.ptr);
 			return true;
 		}

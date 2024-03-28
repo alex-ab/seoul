@@ -12,8 +12,6 @@ DefinitionBlock (
         Device(PCI0) {
             // The following magic code stands for "PCI Host Bridge"
             Name(_HID, EisaId("PNP0A03"))
-            Name(_ADR, 0)
-            Name(_UID, 0)
 
             // Hot Plug Parameters. Optional.
             // Linux will complain and use standard parameters,
@@ -130,22 +128,14 @@ DefinitionBlock (
                 {
                     Return (0x0B)
                 }
-                Method (_CRS, 0, NotSerialized)
+                Name (_CRS, ResourceTemplate ()
                 {
-                    Name (BUFF, ResourceTemplate ()
-                    {
-                        IRQ (Level, ActiveLow, Shared) {5}
-                    })
-                    Return (BUFF)
-                }
-                Method (_PRS, 0, NotSerialized)
-			    {
-				    Name (BUFF, ResourceTemplate ()
-                    {
-					IRQ (Level, ActiveLow, Shared) {5,9,10}
-                    })
-                    Return (BUFF)
-                }
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {5}
+                })
+                Name (_PRS, ResourceTemplate()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {5}
+                })
                 Method (_SRS, 1, NotSerialized) {}
                 Method (_DIS, 0, NotSerialized) {}
         }
@@ -156,22 +146,14 @@ DefinitionBlock (
                 {
                     Return (0x0B)
                 }
-                Method (_CRS, 0, NotSerialized)
+                Name (_CRS, ResourceTemplate ()
                 {
-                    Name (BUFF, ResourceTemplate ()
-                    {
-                        IRQ (Level, ActiveLow, Shared) {10}
-                    })
-                    Return (BUFF)
-                }
-                Method (_PRS, 0, NotSerialized)
-			    {
-				    Name (BUFF, ResourceTemplate ()
-                    {
-					IRQ (Level, ActiveLow, Shared) {5,9,10}
-                    })
-                    Return (BUFF)
-                }
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {10}
+                })
+                Name (_PRS, ResourceTemplate()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {10}
+                })
                 Method (_SRS, 1, NotSerialized) {}
                 Method (_DIS, 0, NotSerialized) {}
         }
@@ -182,22 +164,14 @@ DefinitionBlock (
                 {
                     Return (0x0B)
                 }
-                Method (_CRS, 0, NotSerialized)
+                Name (_CRS, ResourceTemplate ()
                 {
-                    Name (BUFF, ResourceTemplate ()
-                    {
-                        IRQ (Level, ActiveLow, Shared) {9}
-                    })
-                    Return (BUFF)
-                }
-                Method (_PRS, 0, NotSerialized)
-			    {
-				    Name (BUFF, ResourceTemplate ()
-                    {
-					IRQ (Level, ActiveLow, Shared) {5,9,10}
-                    })
-                    Return (BUFF)
-                }
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {11}
+                })
+                Name (_PRS, ResourceTemplate()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {11}
+                })
                 Method (_SRS, 1, NotSerialized) {}
                 Method (_DIS, 0, NotSerialized) {}
         }
@@ -208,22 +182,14 @@ DefinitionBlock (
                 {
                     Return (0x0B)
                 }
-                Method (_CRS, 0, NotSerialized)
+                Name (_CRS, ResourceTemplate ()
                 {
-                    Name (BUFF, ResourceTemplate ()
-                    {
-                        IRQ (Level, ActiveLow, Shared) {5}
-                    })
-                    Return (BUFF)
-                }
-                Method (_PRS, 0, NotSerialized)
-			    {
-				    Name (BUFF, ResourceTemplate ()
-                    {
-					IRQ (Level, ActiveLow, Shared) {5,9,10}
-                    })
-                    Return (BUFF)
-                }
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {13}
+                })
+                Name (_PRS, ResourceTemplate()
+                {
+                    Interrupt (ResourceConsumer, Level, ActiveLow, Shared) {13}
+                })
                 Method (_SRS, 1, NotSerialized) {}
                 Method (_DIS, 0, NotSerialized) {}
         }
@@ -318,5 +284,13 @@ DefinitionBlock (
             \_SB.PCI0.PCNF() // PCI hotplug event
         }
     }
+
+    Name (_S5, Package (0x04)
+    {
+        0x05,
+        Zero,
+        Zero,
+        Zero,
+    })
 
 } // end of definition block

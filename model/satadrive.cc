@@ -441,6 +441,11 @@ void SataDrive::_execute_sata_command()
 			_send_pio_setup_fis(512);
 		_readwrite_sectors(true, lba48_command);
 		break;
+	case 0x40: /* read verify without any transfer of data */
+	case 0x41:
+	case 0x42:
+		_complete_command();
+		break;
 	case 0x34: // WRITE SECTOR EXT
 	case 0x35: // WRITE DMA EXT
 	case 0x39: // WRITE MULTIPLE EXT

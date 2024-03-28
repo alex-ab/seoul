@@ -321,16 +321,16 @@ private:
 			});
 		} else if (!strcmp("DSDT", name)) {
 			size_t table;
-			check1(false, !(table = alloc(sizeof(AmlCode), 0x10)),
+			check1(false, !(table = alloc(sizeof(dsdt_aml_code), 0x10)),
 			       "allocate ACPI table failed");
-			resource = Resource(name, table, sizeof(AmlCode), true);
+			resource = Resource(name, table, sizeof(dsdt_aml_code), true);
 
 			// FADT contains a pointer to the DSDT
 			discovery_write_dw("FACP", 40, table, 4);
 
 			/* The DSDT is completely defined as AML bytecode in dsdt.h
 			 * which was compiled from ASL by the Intel ASL compiler */
-			memcpy(mem_ptr() + table, AmlCode, sizeof(AmlCode));
+			memcpy(mem_ptr() + table, dsdt_aml_code, sizeof(dsdt_aml_code));
 		} else if (!strcmp("FACS", name)) {
 			size_t table;
 			check1(false, !(table = alloc(36, 64)), "allocate ACPI table failed");

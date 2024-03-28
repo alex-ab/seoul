@@ -230,12 +230,15 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 
 		Virtio_input(DBus<MessageIrqLines>  &bus_irqlines,
 		             DBus<MessageMemRegion> &bus_memregion,
-		             unsigned char irq, unsigned short bdf)
+		             uint64 const bar_addr,
+		             uint8  const irq_pin,
+		             uint8  const irq_line,
+		             uint16 const bdf)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq, bdf,
+			Virtio::Device(bus_irqlines, bus_memregion, irq_pin, irq_line, bdf,
 			               18 /* virtio type */,
 			               0x09020001, /* pci class code (input), sub class (mouse), prog if, rev. id */
-			               0xf7a00000ull /* phys bar address XXX */,
+			               bar_addr,
 			               2 /* queues */)
 		{ }
 
@@ -490,19 +493,37 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 		uint32 dev_feature     (unsigned)         override { return 0u; }
 		void   drv_feature_ack (unsigned, uint32) override { }
 		uint32 drv_feature     (unsigned)         override { return 0u; }
+
+		void notify_power(unsigned value) override
+		{
+			Logging::printf("virtio_input: power change %x\n", value);
+
+			if ((value & 3) != 0)
+				return;
+
+			_input_config = { };
+			reset();
+		}
 };
 
 PARAM_HANDLER(virtio_input,
-	      "virtio_input:bdf,irq,xmax,ymax - attach an virtio input to the PCI bus",
-	      "Example: 'virtio_input:,11,4096,4096'.",
+	      "virtio_input:mem,irq,xmax,ymax - attach an virtio input to the PCI bus",
+	      "Example: 'virtio_input:0xe0200000,0x30,4096,4096'",
 	      "If no bdf is given a free one is used.")
 {
-	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[0]));
+	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_input: invalid bdf\n");
 
+	auto const irq_pin  =  3; /* PCI INTC# */
+	auto const irq_line = 11; /* defined by acpicontroller dsdt for INTC# */
+	auto const bar_base = argv[0];
+
+	if (argv[0] == ~0UL)
+		Logging::panic("virtio_gpu: missing bar address");
+
 	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_memregion,
-	                                     uint8(argv[1]),
+	                                     bar_base, irq_pin, irq_line,
 	                                     uint16(bdf));
 
 	mb.bus_pcicfg.add(dev, Virtio_input::receive_static<MessagePciConfig>);
