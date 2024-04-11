@@ -1,7 +1,7 @@
 /**
  * Virtio audio device
  *
- * Copyright (C) 2022, Alexander Boettcher
+ * Copyright (C) 2022-2024, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -25,8 +25,8 @@
 
 struct Virtio_sound_state
 {
-	uint32 period_bytes { };
-	uint32 buffer_bytes { };
+	uint32 period_bytes   { };
+	uint32 buffer_bytes   { };
 	uint32 consumed_bytes { };
 
 	Virtio::Queue::index_ring idx_start { };
@@ -857,7 +857,8 @@ size_t Virtio_sound::_pcm_op(uintptr_t const in,  size_t const in_size,
 			               (type == VIRTIO_SND_R_PCM_RELEASE) ? "release" : "unknown");
 
 		if (type == VIRTIO_SND_R_PCM_START) {
-			MessageAudio msg(MessageAudio::Type::AUDIO_START);
+			MessageAudio msg(MessageAudio::Type::AUDIO_START,
+			                 _state.period_bytes, _state.buffer_bytes, 0);
 			_bus_audio.send(msg);
 		} else
 		if (type == VIRTIO_SND_R_PCM_STOP) {

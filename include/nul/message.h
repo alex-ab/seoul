@@ -9,7 +9,7 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * Copyright (C) 2021-2022 Alexander Boettcher
+ * Copyright (C) 2021-2024 Alexander Boettcher
  *
  * This file is part of Seoul/Vancouver.
  *
@@ -27,7 +27,9 @@
 
 #include <nul/types.h>
 #include <nul/compiler.h>
+
 class VCpu;
+
 struct MessageIOThread
 {
   VCpu *vcpu;
@@ -893,20 +895,23 @@ struct MessageRestore
 
 struct MessageAudio
 {
-  enum Type { AUDIO_START, AUDIO_STOP, AUDIO_OUT, AUDIO_IN,
-              AUDIO_CONTINUE_TX, AUDIO_DRAIN_TX };
+	enum Type { AUDIO_START, AUDIO_STOP, AUDIO_OUT, AUDIO_IN,
+	            AUDIO_CONTINUE_TX, AUDIO_DRAIN_TX };
 
-  enum Type type;
-  uintptr_t data     { };
-  unsigned  size     { };
-  unsigned  consumed { };
-  unsigned  id       { };
+	enum Type type;
+	uintptr_t data     { };
+	unsigned  size     { };
+	unsigned  consumed { };
+	unsigned  id       { };
 
-  MessageAudio(Type const t) : type(t) { }
-  MessageAudio(Type const t, unsigned i) : type(t), id(i) { }
-  MessageAudio(Type const t, uintptr_t d, unsigned s, unsigned c)
-  : type(t), data(d), size(s), consumed(c) { }
+	unsigned period_bytes() const {
+		if (type == AUDIO_START) return unsigned(data); else return 0; }
+
+	unsigned buffer_bytes() const {
+		if (type == AUDIO_START) return size; else return 0; }
+
+	MessageAudio(Type const t) : type(t) { }
+	MessageAudio(Type const t, unsigned i) : type(t), id(i) { }
+	MessageAudio(Type const t, uintptr_t d, unsigned s, unsigned c)
+	: type(t), data(d), size(s), consumed(c) { }
 };
-
-
-/* EOF */
