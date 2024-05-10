@@ -6,19 +6,22 @@
  *
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
+ * Copyright (C) 2024 Alexander Boettcher
  *
- * This file is part of Vancouver.
+ * This file is part of Seoul.
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
  */
+
 #pragma once
+
 #include "service/cpu.h"
 #include "service/math.h"
 
@@ -36,49 +39,67 @@ typedef unsigned long long timevalue;
  */
 class Clock
 {
- protected:
-  timevalue _source_freq;
- public:
-#ifdef TESTING
-  virtual
-#endif
-  timevalue time() { return Cpu::rdtsc(); }
+	protected:
 
-  /**
-   * Returns the current clock in freq-time.
-   */
-  timevalue clock(timevalue freq, timevalue t_cur = 0) { return Math::muldiv128(t_cur == 0 ? time() : t_cur, freq, _source_freq); }
+		timevalue const _source_freq;
 
-  /**
-   * Frequency of the clock.
-   */
-  timevalue freq() { return _source_freq; }
+	public:
 
-  /**
-   * Returns a timeout in absolute TSC time.
-   * @param thedelta The timeout
-   * @param freq Scale of @a thedelta
-   *
-   * The timeout equals to thedelta/freq seconds.
-   *
-   * Example: abstime(5, 1000) returns the time of now plus 5 milliseconds.
-   */
-  timevalue abstime(timevalue thedelta, timevalue freq) {  return time() + Math::muldiv128(thedelta, _source_freq, freq); }
+		static timevalue time() { return Cpu::rdtsc(); }
 
+		timevalue freq() const { return _source_freq; }
 
-  /**
-   * Returns a delta in another frequency domain from an absolute TSC value.
-   */
-  timevalue delta(timevalue theabstime, timevalue freq) {
-    timevalue now = time();
-    if (now > theabstime) return 0;
-    return Math::muldiv128(theabstime - now, freq, _source_freq);
-  }
+		/**
+		 * Returns the clock in freq-time. If tsc is not specified, the
+		 * current tsc value of time() is used.
+		 */
+		timevalue clock(timevalue const freq, timevalue const tsc = time()) const
+		{
+			return Math::muldiv128(tsc, freq, _source_freq);
+		}
 
-  Clock(timevalue source_freq) : _source_freq(source_freq) {}
+		timevalue convert_tsc_to(timevalue const non_tsc_freq, timevalue const tsc) const
+		{
+			return clock(non_tsc_freq, tsc);
+		}
+
+		timevalue convert_to_tsc(timevalue const non_tsc_freq, timevalue const non_tsc) const
+		{
+			return Math::muldiv128(non_tsc, _source_freq, non_tsc_freq);
+		}
+
+		/**
+		 * Returns a timeout in absolute TSC time.
+		 *
+		 * @param thedelta The timeout in freq domain
+		 * @param freq     Scale of @a thedelta
+		 * @param base     TSC base (if not specified current tsc)
+		 *
+		 * The timeout equals to thedelta/freq seconds.
+		 *
+		 * Example: abstime(5, 1000) returns the time of base plus 5 ms.
+		 */
+		timevalue abstime(timevalue const thedelta, timevalue const freq,
+		                  timevalue const base = time()) const
+		{
+			return base + convert_to_tsc(freq, thedelta);
+		}
+
+		/**
+		 * Returns a delta in another frequency domain from an absolute TSC value.
+		 */
+		timevalue delta(timevalue const tsc_absolute,
+		                timevalue const freq,
+		                timevalue const tsc_now = time()) const
+		{
+			if (tsc_now >= tsc_absolute)
+				return 0ull;
+
+			return clock(freq, tsc_absolute - tsc_now);
+		}
+
+		Clock(timevalue source_freq) : _source_freq(source_freq) {}
 };
-
-
 
 
 /**
