@@ -1,5 +1,4 @@
-// -*- Mode: C++ -*-
-/** @file
+/**
  * Intel 82576 VF device model.
  *
  * Copyright (C) 2010, Julian Stecklina <jsteckli@os.inf.tu-dresden.de>
@@ -7,13 +6,15 @@
  *
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  *
- * This file is part of Vancouver.
+ * Copyright (C) 2024 Alexander Boettcher
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * This file is part of Seoul.
+ *
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -60,19 +61,26 @@ enum { MAP_OFFSET = 0x2000 };
 
 class Model82576vf : public StaticReceiver<Model82576vf>
 {
-private:
-  /*
-   * Noncopyable
-   */
-  Model82576vf(Model82576vf const &);
-  Model82576vf &operator = (Model82576vf const &);
+	private:
 
-  EthernetAddr           _mac;
-  DBus<MessageNetwork>  &_net;
+		/*
+		 * Noncopyable
+		 */
+		Model82576vf(Model82576vf const &);
+		Model82576vf &operator = (Model82576vf const &);
+
 #include "model/simplemem.h"
-  Seoul::Lock            _lock { };
-  Clock                 *_clock;
-  DBus<MessageTimer>    &_timer;
+
+		EthernetAddr           _mac;
+
+		DBus<MessageNetwork>   &_net;
+		DBus<MessageTimer>     &_timer;
+		DBus<MessageMemRegion> &_bus_memregion;
+		DBus<MessageMem>       &_bus_mem;
+		Clock                  &_clock;
+
+		Seoul::Lock             _lock { };
+
   unsigned               _timer_nr {0};
   unsigned               _net_id;
 
@@ -657,7 +665,6 @@ private:
 
   unsigned _ip_address;
   EthernetAddr _guest_uses_mac;
-  bool processed;
 
   void update_ip(unsigned char *packet, unsigned packet_len)
   {
@@ -700,7 +707,7 @@ private:
   void *guestmem(uint64 addr)
   {
     MessageMemRegion msg(uintptr_t(addr >> 12));
-    if (!_bus_memregion->send(msg) || !msg.ptr)
+    if (!_bus_memregion.send(msg) || !msg.ptr)
       Logging::panic("Address translation failed.\n");
     return msg.ptr + addr - (msg.start_page << 12);
   }
@@ -718,7 +725,7 @@ private:
       if ((_msix.table[nr].vector_control & 1) == 0) {
 	// Logging::printf("Generating MSI-X IRQ %d (%02x)\n", nr, _msix.table[nr].msg_data & 0xFF);
 	MessageMem msg(false, _msix.table[nr].msg_addr, &_msix.table[nr].msg_data);
-	_bus_mem->send(msg);
+	_bus_mem.send(msg);
 
 	// Auto-Clear
 	// XXX Do we auto-clear even if the interrupt cause was masked?
@@ -964,7 +971,7 @@ public:
 	void reprogram_timer()
 	{
 		assert(_txpoll_us != 0);
-		MessageTimer msgn(_timer_nr, _clock->abstime(_txpoll_us, 1000000));
+		MessageTimer msgn(_timer_nr, _clock.abstime(_txpoll_us, 1000000));
 		if (!_timer.send(msgn))
 			Logging::panic("%s could not program timer.", __PRETTY_FUNCTION__);
 	}
@@ -1084,25 +1091,27 @@ public:
 		return false;
 	}
 
-  Model82576vf(uint64 mac, DBus<MessageNetwork> &net,
-	       DBus<MessageMem> *bus_mem, DBus<MessageMemRegion> *bus_memregion,
-	       Clock *clock, DBus<MessageTimer> &timer,
-	       uint32 mem_mmio, uint32 * local_rx_regs,
-	       uint32 mem_msix,
-	       unsigned txpoll_us, bool map_rx, unsigned bdf,
-	       bool promisc_default, bool verbose, unsigned net_id)
-    : _mac(mac), _net(net), _bus_memregion(bus_memregion), _bus_mem(bus_mem),
-      _clock(clock), _timer(timer),
-      _net_id(net_id),
-      _mem_mmio(mem_mmio), _mem_msix(mem_msix),
-      _local_rx_regs(local_rx_regs), _local_tx_regs(_local_rx_regs + 1024),
-      _txpoll_us(txpoll_us), _bdf(bdf), _map_rx(map_rx),
-      _verbose(verbose), _promisc_default(promisc_default),
-      _ip_address(0), _guest_uses_mac(0),
-      processed(false)
-  {
-    Logging::printf("Attached 82576VF model at %08x+0x4000, %08x+0x1000\n",
-		    mem_mmio, mem_msix);
+	bool copy_out(uintptr_t address, void *ptr, size_t count) {
+		return copy_out(_bus_memregion, _bus_mem, address, ptr, count); }
+
+	bool copy_in(uintptr_t address, void *ptr, size_t count) {
+		return copy_in(_bus_memregion, _bus_mem, address, ptr, count); }
+
+	Model82576vf(uint64 mac, Motherboard &mb,
+	             uint32 mem_mmio, uint32 * local_rx_regs, uint32 mem_msix,
+	             unsigned txpoll_us, bool map_rx, unsigned bdf,
+	             bool promisc_default, bool verbose, unsigned net_id)
+	: _mac(mac), _net(mb.bus_network), _timer(mb.bus_timer),
+	  _bus_memregion(mb.bus_memregion), _bus_mem(mb.bus_mem),
+	  _clock(*mb.clock()), _net_id(net_id),
+	  _mem_mmio(mem_mmio), _mem_msix(mem_msix),
+	  _local_rx_regs(local_rx_regs), _local_tx_regs(_local_rx_regs + 1024),
+	  _txpoll_us(txpoll_us), _bdf(bdf), _map_rx(map_rx),
+	  _verbose(verbose), _promisc_default(promisc_default),
+	  _ip_address(0), _guest_uses_mac(0)
+	{
+		Logging::printf("Attached 82576VF model at %08x+0x4000, %08x+0x1000\n",
+		                mem_mmio, mem_msix);
 
     // Init queues
     _rx_queues[0].init(this, 0, _local_rx_regs);
@@ -1149,9 +1158,7 @@ PARAM_HANDLER(intel82576vf,
 	if (!mb.bus_hostop.send(msg_mmio) || !msg_mmio.ptr)
 		Logging::panic("82576vf: can not allocate IOMEM region");
 
-	auto *dev = new Model82576vf(hton64(msg.mac) >> 16,
-				       mb.bus_network, &mb.bus_mem, &mb.bus_memregion,
-				       mb.clock(), mb.bus_timer,
+	auto *dev = new Model82576vf(hton64(msg.mac) >> 16, mb,
 				       mem_mmio, reinterpret_cast<uint32 *>(msg_mmio.ptr),
 				       unsigned(argv[2]),
 				       (argv[3] == ~0UL) ? 0UL : unsigned(argv[3]),

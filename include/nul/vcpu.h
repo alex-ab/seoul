@@ -19,9 +19,11 @@
  * General Public License version 2 for more details.
  */
 #pragma once
+
 #include "bus.h"
 #include "executor/cpustate.h"
 #include "message.h"
+
 
 /**
  * The size in bytes of the VCPU parameters.
@@ -106,6 +108,7 @@ struct LapicEvent {
 
 class VCpu
 {
+#include "model/simplemem.h"
   VCpu *_last;
 public:
   DBus<CpuMessage>       executor  { };
@@ -209,61 +212,26 @@ public:
     }
   }
 
-  /**
-   * Make VCPU-local guest memory available to a model.  This includes the LAPIC and the Shmem-BIOS area.
-   */
-  bool copy_inout(unsigned long address, void *ptr, unsigned short count, bool read)
-  {
-//    Logging::printf("copy_%s(%lx, %x) %d\n", read ? "in" : "out", address, count, params_used);
-    if (!check_params(address, count, read)) return false;
+	/*
+	 * Make VCPU-local guest memory available to a model via copy in/out.
+	 * This includes the LAPIC and the Shmem-BIOS area.
+	 */
 
-    MessageMemRegion msg(address >> 12);
-    if (!memregion.send(msg) || !msg.ptr || ((address + count) > ((msg.start_page + msg.count) << 12))) {
-      char *p = reinterpret_cast<char *>(ptr);
+	bool copy_in(unsigned long address, void *ptr, unsigned short count)
+	{
+		if (!check_params(address, count, true))
+			return false;
 
-      if (address & 3) {
-	unsigned value;
-	MessageMem msg(true, address & ~3, &value);
-	if (!mem.send(msg, true)) return false;
-	unsigned short l = 4 - (address & 3);
-	if (l > count) l = count;
-	memcpy(reinterpret_cast<char *>(&value) + (address & 3), p, l);
-	if (!read) {
-	  msg.read = false;
-	  if (!mem.send(msg, true)) return false;
+		return copy_in(memregion, mem, address, ptr, count);
 	}
-	p       += l;
-	address += l;
-	count   -= l;
-      }
-      while (count >= 4) {
-	MessageMem msg(false, address, reinterpret_cast<unsigned *>(p));
-	if (!mem.send(msg, read)) return false;
-	address += 4;
-	p       += 4;
-	count   -= 4;
-      }
-      if (count) {
-	unsigned value;
-	MessageMem msg(true, address, &value);
-	if (!mem.send(msg, true)) return false;
-	memcpy(&value, p, count);
-	if (!read) {
-	  msg.read = false;
-	  if (!mem.send(msg, true)) return false;
-	}
-      }
-      return true;
-    }
-    if (read)
-      memcpy(ptr, msg.ptr + (address - (msg.start_page << 12)), count);
-    else
-      memcpy(msg.ptr + (address - (msg.start_page << 12)), ptr, count);
-    return true;
-  }
-  bool copy_in(unsigned long address, void *ptr, unsigned short count)  { return copy_inout(address, ptr, count, true);  }
-  bool copy_out(unsigned long address, void *ptr, unsigned short count) { return copy_inout(address, ptr, count, false); }
 
-  unsigned long long inj_count;
-  VCpu (VCpu *last) : _last(last), inj_count(0) {}
+	bool copy_out(unsigned long address, void const * ptr, unsigned short count)
+	{
+		if (!check_params(address, count, false))
+			return false;
+
+		return copy_out(memregion, mem, address, ptr, count);
+	}
+
+	VCpu (VCpu *last) : _last(last) {}
 };

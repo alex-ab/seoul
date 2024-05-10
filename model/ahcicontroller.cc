@@ -46,6 +46,8 @@ class AhciPort : public FisReceiver
   unsigned _inprogress;
   bool _need_initial_fis;
 
+	DBus<MessageMemRegion>  *_bus_memregion { };
+	DBus<MessageMem>        *_bus_mem       { };
 
 #define  VMM_REGBASE "../model/ahcicontroller.cc"
 #include "model/reg.h"
@@ -130,10 +132,11 @@ public:
 	Logging::panic("Invalid D2H FIS!");
       }
 
-    // copy to user
-    if (PxCMD & 0x10)  copy_out(PxFB + copy_offset, fis, fislen * 4);
-    if (fis[0] & 0x4000) _parent->trigger_irq(this);
-  };
+		// copy to user
+		if (PxCMD & 0x10)
+			copy_out(*_bus_memregion, *_bus_mem, PxFB + copy_offset, fis, fislen * 4);
+		if (fis[0] & 0x4000) _parent->trigger_irq(this);
+	};
 
 
 	bool set_drive(FisReceiver *drive)
@@ -196,11 +199,11 @@ public:
 	      _inprogress |= 1 << slot;
 
 	      unsigned  cl[4];
-	      copy_in(PxCLB +  slot * 0x20, cl, sizeof(cl));
+	      copy_in(*_bus_memregion, *_bus_mem, PxCLB + slot * 0x20, cl, sizeof(cl));
 	      unsigned clflags  = cl[0];
 
 	      unsigned ct[32];
-	      copy_in(cl[2], ct, (clflags & 0x1f) * sizeof(unsigned));
+	      copy_in(*_bus_memregion, *_bus_mem, cl[2], ct, (clflags & 0x1f) * sizeof(unsigned));
 	      assert(~clflags & 0x20 && "ATAPI unimplemented");
 
 	      // send a dma_setup_fis

@@ -1,4 +1,4 @@
-/** @file
+/**
  * SataDrive virtualisation.
  *
  * Copyright (C) 2008-2009, Bernhard Kauer <bk@vmmon.org>
@@ -6,13 +6,13 @@
  *
  * Copyright (C) 2014-2024, Alexander Boettcher
  *
- * This file is part of Seoul/Vancouver.
+ * This file is part of Seoul.
  *
- * Seoul/Vancouver is free software: you can redistribute it and/or modify
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Seoul/Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -38,8 +38,11 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 
 		#include "model/simplemem.h"
 
-		DBus<MessageDisk>   &_bus_disk;
-		FisReceiver         &_peer;
+		DBus<MessageMemRegion> &_bus_memregion;
+		DBus<MessageMem>       &_bus_mem;
+		DBus<MessageDisk>      &_bus_disk;
+
+		FisReceiver            &_peer;
 
 		unsigned       const _hostdisk;
 		DiskParameter  const _params;
@@ -165,21 +168,25 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 			return *msg.drive;
 		}
 
+		bool copy_out(uintptr_t address, void *ptr, size_t count) {
+			return copy_out(_bus_memregion, _bus_mem, address, ptr, count); }
+
+		bool copy_in(uintptr_t address, void *ptr, size_t count) {
+			return copy_in(_bus_memregion, _bus_mem, address, ptr, count); }
+
 	public:
 
 		bool receive(MessageDiskCommit &msg);
 
-		SataDrive(DBus<MessageDisk>         &bus_disk,
-		          DBus<MessageMemRegion>    *bus_memregion,
-		          DBus<MessageMem>          *bus_mem,
-		          DBus<MessageAhciSetDrive> &bus_ahci,
+		SataDrive(Motherboard               &mb,
 		          unsigned          const    hostdisk,
 		          DiskParameter     const   &params,
 		          unsigned          const    port_id,
 		          unsigned          const    ctrl_id,
 		          bool              const    verbose)
-		: _bus_memregion(bus_memregion), _bus_mem(bus_mem), _bus_disk(bus_disk),
-		  _peer(_request_peer(bus_ahci, port_id, ctrl_id)),
+		: _bus_memregion(mb.bus_memregion), _bus_mem(mb.bus_mem),
+		  _bus_disk(mb.bus_disk),
+		  _peer(_request_peer(mb.bus_ahcicontroller, port_id, ctrl_id)),
 		  _hostdisk(hostdisk), _params(params), _verbose(verbose)
 		{
 			if (_verbose)
@@ -188,7 +195,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 
 			/* trigger explicitly comreset in set_drive due to this retry */
 			MessageAhciSetDrive msg(this, port_id);
-			bus_ahci.send(msg, ctrl_id);
+			mb.bus_ahcicontroller.send(msg, ctrl_id);
 		}
 };
 
@@ -620,8 +627,7 @@ PARAM_HANDLER(drive,
 	       "sata drive could not get disk %x parameters error %x",
 	       hostdisk, msg0.error);
 
-	auto drive = new SataDrive(mb.bus_disk, &mb.bus_memregion, &mb.bus_mem,
-	                           mb.bus_ahcicontroller, hostdisk, params,
+	auto drive = new SataDrive(mb, hostdisk, params,
 	                           unsigned(argv[2]), unsigned(argv[1]),
 	                           (argv[3] == ~0UL) ? false : (argv[3] != 0UL));
 	mb.bus_diskcommit.add(drive, SataDrive::receive_static<MessageDiskCommit>);
