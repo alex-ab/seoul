@@ -68,8 +68,9 @@ private:
 	unsigned irq_routing(unsigned gsi)
 	{
 		// we do the IRQ line routing here and switch GSI2 and 0
-		if (gsi == 2 || !gsi) gsi = 2 - gsi;
-			return gsi - _gsibase;
+		if (gsi == 2 || !gsi)
+			gsi = 2 - gsi;
+		return gsi - _gsibase;
 	}
 
 	/**
@@ -153,9 +154,10 @@ private:
 		if (pin >= PINS)
 			return false;
 
-		if (type == MessageIrq::DEASSERT_IRQ)
-			_ds[pin] = false;
-		else {
+		if (type == MessageIrq::DEASSERT_IRQ) {
+			_ds  [pin] = false;
+			_rirr[pin] = false;
+		} else {
 			// have we already send the message
 			if (_rirr[pin])
 				return true;
