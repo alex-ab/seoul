@@ -182,10 +182,11 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		 * when used with linux cmdline: vga=0x318
 		 */
 		enum {
+			HEURISTIC_UNDEFINED_INITIAL,
 			HEURISTIC_UNDEFINED,
 			HEURISTIC_DISABLE_SCANOUT,
 			HEURISTIC_ENABLE_SCANOUT,
-		} _heuristic_hide { HEURISTIC_UNDEFINED };
+		} _heuristic_hide { HEURISTIC_UNDEFINED_INITIAL };
 
 		~Virtio_gpu();
 
@@ -821,8 +822,7 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 			}
 
 			bool calc_sum = _heuristic_hide == HEURISTIC_ENABLE_SCANOUT &&
-			                !flush.r.x && flush.r.width  == mode_host.width &&
-			                !flush.r.y && flush.r.height == mode_host.height;
+			                !flush.r.x && !flush.r.y;
 			uint64 sum = 0;
 
 			for (unsigned y = flush.r.y; y < flush.r.y + flush.r.height; y ++) {
@@ -847,7 +847,7 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 				}
 			}
 
-			if (calc_sum && !sum)
+			if (_verbose && calc_sum && !sum)
 				Logging::printf("virtio_gpu: hide window");
 
 			if ((!calc_sum && _heuristic_hide != HEURISTIC_UNDEFINED) || sum)
@@ -855,6 +855,12 @@ size_t Virtio_gpu::_gpu_res_flush(uintptr_t const in,  size_t const in_size,
 
 			auto const hide = calc_sum && !sum;
 			auto const view = 0;
+
+			if (_verbose && !flush.r.x && !flush.r.y)
+				Logging::printf("virtio_gpu: %s %ux%u+%ux%u host %ux%u",
+				                hide ? "hide" : "no hide",
+				                flush.r.x, flush.r.y, flush.r.width, flush.r.height,
+				                mode_host.width, mode_host.height);
 
 			MessageConsole msg(console_id, view, hide,
 			                   { flush.r.x, flush.r.y },
@@ -889,11 +895,16 @@ size_t Virtio_gpu::_gpu_set_scanout(uintptr_t request,  size_t request_size,
 			                scanout.resource_id == 0 ? "disable" : "enable");
 
 		if (scanout.resource_id == 0)
-			_heuristic_hide = HEURISTIC_DISABLE_SCANOUT;
+			if (_heuristic_hide == HEURISTIC_UNDEFINED_INITIAL)
+				_heuristic_hide = HEURISTIC_UNDEFINED;
+			else
+				_heuristic_hide = HEURISTIC_DISABLE_SCANOUT;
 		else
 		if (scanout.resource_id) {
-			if (_heuristic_hide == HEURISTIC_DISABLE_SCANOUT)
+			if (_heuristic_hide == HEURISTIC_DISABLE_SCANOUT && scanout.resource_id == 2)
 				_heuristic_hide = HEURISTIC_ENABLE_SCANOUT;
+			else
+				_heuristic_hide = HEURISTIC_UNDEFINED;
 		}
 
 		/* XXX resource_id == 0 -> disable - how to handle XXX */
