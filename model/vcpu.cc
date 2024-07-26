@@ -1,4 +1,4 @@
-/** @file
+/**
  * Virtual CPU.
  *
  * Copyright (C) 2010, Bernhard Kauer <bk@vmmon.org>
@@ -7,13 +7,15 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * This file is part of Vancouver.
+ * Copyright (C) 2014-2024 Alexander Boettcher
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * This file is part of Seoul.
+ *
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -44,47 +46,75 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
   unsigned char debugioout[8192];
   #endif
 
-  bool _amd   { };
-  bool _intel { };
+	bool _amd   { };
+	bool _intel { };
+	bool _verbose { false };
 
-  void GP0(CpuMessage &msg) {
-    msg.cpu->inj_info = 0x80000b0d;
-    msg.cpu->inj_error = 0;
-    msg.mtr_out |= MTD_INJ;
-  }
+	void GP0(CpuMessage &msg)
+	{
+		msg.cpu->inj_info = 0x80000b0d;
+		msg.cpu->inj_error = 0;
+		msg.mtr_out |= MTD_INJ;
+	}
 
+	bool handle_cpuid(CpuMessage &msg)
+	{
+		unsigned const index   = msg.cpu->eax;
+		unsigned const subleaf = msg.cpu->ecx;
 
-  bool handle_cpuid(CpuMessage &msg) {
-    bool res = true;
-    unsigned reg;
-    if (msg.cpuid_index & 0x80000000u && msg.cpuid_index <= CPUID_EAX80)
-      reg = (msg.cpuid_index << 4) | 0x80000000u;
-    else {
-      reg = msg.cpuid_index << 4;
-      if (msg.cpuid_index > CPUID_EAX0) {
-        reg = CPUID_EAX0 << 4;
-        res = false;
-      }
-    }
-//    Logging::printf("%s %x->%x\n", __func__, msg.cpuid_index, reg);
+		bool     for_us = false;
+		unsigned reg    = index << 4;
 
-    if (!CPUID_read(reg | 0, msg.cpu->eax)) msg.cpu->eax = 0;
-    if (!CPUID_read(reg | 1, msg.cpu->ebx)) msg.cpu->ebx = 0;
-    if (!CPUID_read(reg | 2, msg.cpu->ecx)) msg.cpu->ecx = 0;
-    if (!CPUID_read(reg | 3, msg.cpu->edx)) msg.cpu->edx = 0;
+		if (index & 0x80000000u) {
+			reg |= 0x80000000u;
+			if (index <= CPUID_EAX80) for_us = true;
+		} else
+			if (index <= CPUID_EAX_0) for_us = true;
 
-/*
-	Logging::printf("%s %x->%x %x:%x:%x:%x\n",
-	                __func__, msg.cpuid_index, reg,
-	                msg.cpu->eax,
-	                msg.cpu->ebx,
-	                msg.cpu->ecx,
-	                msg.cpu->edx);
-*/
+		/* not in our range - not for us - give others to handle it */
+		if (!for_us)
+			return false;
 
-    msg.mtr_out |= MTD_GPR_ACDB;
-    return res;
-  }
+		/* XXX generalize subleaf handling ? */
+		if (index == 0x7 && subleaf < 4)
+			reg += subleaf * 4;
+
+		if (_verbose)
+			Logging::printf("%s %x:%x->%x\n", __func__, index, subleaf, reg);
+
+		{
+			unsigned eax = msg.cpu->eax;
+			unsigned ebx = msg.cpu->ebx;
+			unsigned ecx = msg.cpu->ecx;
+			unsigned edx = msg.cpu->edx;
+
+			bool ok_a = CPUID_read(reg | 0, eax);
+			bool ok_b = CPUID_read(reg | 1, ebx);
+			bool ok_c = CPUID_read(reg | 2, ecx);
+			bool ok_d = CPUID_read(reg | 3, edx);
+
+			/* not handled by us - let handle it by others */
+			if (!ok_a && !ok_b && !ok_c && !ok_d)
+				return false;
+
+			msg.cpu->eax = ok_a ? eax : 0;
+			msg.cpu->ebx = ok_b ? ebx : 0;
+			msg.cpu->ecx = ok_c ? ecx : 0;
+			msg.cpu->edx = ok_d ? edx : 0;
+		}
+
+		if (_verbose)
+			Logging::printf("%s %x->%x %x:%x:%x:%x\n",
+			                __func__, index, reg,
+			                msg.cpu->eax,
+			                msg.cpu->ebx,
+			                msg.cpu->ecx,
+			                msg.cpu->edx);
+
+		msg.mtr_out |= MTD_GPR_ACDB;
+
+		return true;
+	}
 
   /**
    * Return current TSC offset. Works around destroyed value in
@@ -112,6 +142,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     /* should be solely available if CPUID.0AH: EAX[15:8] > PMC_nr (0, 1, ..) */
     IA32_PMC0            = 0xc1,
     IA32_PMC1            = 0xc2,
+    IA32_XSS             = 0xda0, /* XSAVE */
     /* Linux seems to not care about PCM0/1 detection ? */
     IA32_MTRRCAP         = 0xfe,
     MISC_FEATURE_ENABLES = 0x140,
@@ -250,7 +281,6 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     case 0x179: /* MCG CAP */
     case IA32_PERFEVTSEL0:
     case IA32_PERFEVTSEL1:
-    case IA32_MISC_ENABLE:
     case 0x250:
     case 0x258:
     case 0x259:
@@ -258,9 +288,12 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     case 0x2ff:
       msg.cpu->edx_eax(0);
       break;
+    case IA32_MISC_ENABLE:
+      msg.cpu->edx_eax(1 /* fast string operation */);
+      break;
     case 0x277:
       Logging::printf("[%u] IA32_PAT_MSR rdmsr %x at %x\n",
-                      CPUID_EDXb, msg.cpu->ecx, msg.cpu->eip);
+                      CPUID_EDX_b, msg.cpu->ecx, msg.cpu->eip);
       msg.cpu->edx_eax(0x0007040600070406ull);
       break;
     case IA32_BIOS_SIGN_ID:
@@ -289,7 +322,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 #endif
     default:
       Logging::printf("[%u] unsupported rdmsr %x at %x\n",
-                      CPUID_EDXb, msg.cpu->ecx, msg.cpu->eip);
+                      CPUID_EDX_b, msg.cpu->ecx, msg.cpu->eip);
       msg.cpu->edx_eax(0);
       //GP0(msg);
     }
@@ -357,6 +390,11 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       case IA32_PMC0:
       case IA32_PMC1:
         break;
+      case IA32_XSS:
+        assert(msg.mtr_in & MTD_XSAVE);
+        cpu->xss = cpu->edx_eax();
+        msg.mtr_out |= MTD_XSAVE;
+        break;
       case MISC_FEATURE_ENABLES: /* user mode monitor+mwait - not supported */
         break;
       case MSR_PRED_CMD_IBPB:
@@ -367,7 +405,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
         msg.mtr_out |= MTD_SYSENTER;
         break;
       case 0x1d9: /* debug ctl - unsupported */
-        Logging::printf("[%u] unsupported wrmsr debug ctl\n", CPUID_EDXb);
+        Logging::printf("[%u] unsupported wrmsr debug ctl\n", CPUID_EDX_b);
         break;
 #ifdef __x86_64__
       case 0xc0000080:
@@ -420,7 +458,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 #endif
       default:
         Logging::printf("[%u] unsupported wrmsr %x <-(%x:%x) at %lx\n",
-                        CPUID_EDXb, cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
+                        CPUID_EDX_b, cpu->ecx, cpu->edx, cpu->eax, cpu->rip);
         //GP0(msg);
       }
   }
@@ -487,7 +525,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     if (reset) {
       if (false)
         Logging::printf("[%u] reset CPU from %x mtr_in %x\n",
-                        CPUID_EDXb, msg.type, msg.mtr_in);
+                        CPUID_EDX_b, msg.type, msg.mtr_in);
 
       #if DEBUG_IOEXITS
       memset(debugioin , 0, sizeof(debugioin));
@@ -530,7 +568,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     if (old_event & (EVENT_DEBUG | EVENT_HOST)) {
       if (old_event & EVENT_DEBUG)
         Logging::printf("[%u] state %x event %8x eip %8x eax %x ebx %x edx %x esi %x\n",
-                        CPUID_EDXb, cpu->actv_state, old_event, cpu->eip, cpu->eax, cpu->ebx, cpu->edx, cpu->esi);
+                        CPUID_EDX_b, cpu->actv_state, old_event, cpu->eip, cpu->eax, cpu->ebx, cpu->edx, cpu->esi);
       else
         if (cpu->actv_state == 1) cpu->actv_state = 0; //if cpu is in hlt wake it up
       Cpu::atomic_and<volatile unsigned>(&_event, ~(old_event & (EVENT_DEBUG | EVENT_HOST)));
@@ -570,7 +608,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     // SMI
     if (old_event & EVENT_SMI && ~cpu->intr_state & 4) {
-      Logging::printf("[%u] SMI received\n", CPUID_EDXb);
+      Logging::printf("[%u] SMI received\n", CPUID_EDX_b);
       Cpu::atomic_and<volatile unsigned>(&_event, ~VCpu::EVENT_SMI);
       cpu->actv_state = 0;
       // fall trough
@@ -581,7 +619,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
 
     // NMI
     if (old_event & EVENT_NMI && ~cpu->intr_state & 8 && !(cpu->intr_state & 3)) {
-      Logging::printf("[%u] inject NMI %x\n", CPUID_EDXb, old_event);
+      Logging::printf("[%u] inject NMI %x\n", CPUID_EDX_b, old_event);
       cpu->inj_info = 0x80000202;
       cpu->actv_state = 0;
       Cpu::atomic_and<volatile unsigned>(&_event, ~VCpu::EVENT_NMI);
@@ -634,7 +672,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     if (!res && ~debugioin[msg.port >> 3] & (1u << (msg.port & 7))) {
       debugioin[msg.port >> 3] |= uint8(1u << (msg.port & 7));
       Logging::printf("[%u] could not read from ioport %x eip %x cs %x-%x\n",
-                      CPUID_EDXb, msg.port, msg.cpu->eip, msg.cpu->cs.base, msg.cpu->cs.ar);
+                      CPUID_EDX_b, msg.port, msg.cpu->eip, msg.cpu->cs.base, msg.cpu->cs.ar);
     } else msg.consumed = 1;
     #else
     msg.consumed = 1;
@@ -652,7 +690,7 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
     if (!res && ~debugioout[msg.port >> 3] & (1 << (msg.port & 7))) {
       debugioout[msg.port >> 3] |= uint8(1u << (msg.port & 7));
       Logging::printf("[%u] could not write %x to ioport %x eip %x\n",
-                      CPUID_EDXb, msg.cpu->eax, msg.port, msg.cpu->eip);
+                      CPUID_EDX_b, msg.cpu->eax, msg.port, msg.cpu->eip);
     } else msg.consumed = 1;
     #else
     msg.consumed = 1;
@@ -717,7 +755,7 @@ public:
     }
 
     // BSP receives only legacy signals if the LAPIC is disabled
-    if (is_ap() || CPUID_EDX1 & (1 << 9)) return false;
+    if (is_ap() || CPUID_EDX_1 & (1 << 9)) return false;
 
     if (msg.type == MessageLegacy::INTR)
       got_event(EVENT_INTR);
@@ -751,146 +789,222 @@ public:
     return false;
   }
 
-  bool claim(CpuMessage &msg) { /* Entire vCPU subsystem should be bypassing */ return true; }
-  bool receive(CpuMessage &msg) {
+	bool claim(CpuMessage &msg) { return true; } /* entire vCPU subsystem should be bypassing */
+	bool receive(CpuMessage &); 
 
-    if (msg.type == CpuMessage::TYPE_ADD_TSC_OFF) {
-        _reset_tsc_off += msg.current_tsc_off;
-        return true;
-    }
-
-    // TSC drift compensation.
-    if (msg.type != CpuMessage::TYPE_CPUID_WRITE && msg.mtr_in & MTD_TSC && ~msg.mtr_out & MTD_TSC) {
-      COUNTER_INC("tsc adoption");
-      msg.current_tsc_off = _reset_tsc_off;
-      msg.cpu->tsc_off    = msg.current_tsc_off - msg.cpu->tsc_off;
-      msg.mtr_out |= MTD_TSC;
-    }
-
-
-    switch (msg.type) {
-    case CpuMessage::TYPE_CPUID:    return handle_cpuid(msg);
-    case CpuMessage::TYPE_CPUID_WRITE:
-      {
-	unsigned reg = (msg.nr << 4) | msg.reg | (msg.nr & 0x80000000);
-	unsigned old;
-	if (CPUID_read(reg, old) && CPUID_write(reg, (old & msg.mask) | msg.value)) {
-	  CPUID_read(reg, old);
-	  return true;
-	}
-	return false;
-      };
-    case CpuMessage::TYPE_RDTSC:
-      handle_rdtsc(msg);
-      return true;
-    case CpuMessage::TYPE_RDMSR:
-      handle_rdmsr(msg);
-      return true;
-    case CpuMessage::TYPE_WRMSR:
-      handle_wrmsr(msg);
-      return true;
-    case CpuMessage::TYPE_IOIN:
-      handle_ioin(msg);
-      return true;
-    case CpuMessage::TYPE_IOOUT:
-      handle_ioout(msg);
-      return true;
-    case CpuMessage::TYPE_INIT:
-      got_event(EVENT_INIT);
-      return true;
-    case CpuMessage::TYPE_TRIPLE:
-      msg.cpu->actv_state = 2;
-      if (!is_ap())
-	got_event(EVENT_RESET);
-      break;
-    case CpuMessage::TYPE_HLT:
-      assert(!msg.cpu->actv_state);
-      msg.cpu->actv_state = 1;
-      break;
-    case CpuMessage::TYPE_CHECK_IRQ:
-      // we handle it later on
-      break;
-    case CpuMessage::TYPE_CALC_IRQWINDOW:
-      {
-	assert(msg.mtr_out & MTD_INJ);
-	unsigned new_event = _event;
-	msg.cpu->inj_info &= ~INJ_WIN;
-	if (new_event & EVENT_INTR)                    msg.cpu->inj_info |= INJ_IRQWIN;
-	if (new_event & EVENT_NMI)                     msg.cpu->inj_info |= INJ_NMIWIN;
-      }
-      return true;
-    case CpuMessage::TYPE_SINGLE_STEP:
-    case CpuMessage::TYPE_WBINVD:
-    case CpuMessage::TYPE_INVD:
-    case CpuMessage::TYPE_ADD_TSC_OFF:
-    default:
-      return false;
-    }
-
-    // handle IRQ injection
-    for (prioritize_events(msg); msg.cpu->actv_state & 0x3; prioritize_events(msg)) {
-      MessageHostOp msg2(MessageHostOp::OP_VCPU_BLOCK, _hostop_id);
-      Cpu::atomic_or<volatile unsigned>(&_event, STATE_BLOCK);
-      if (~_event & STATE_WAKEUP) _mb.bus_hostop.send(msg2);
-      Cpu::atomic_and<volatile unsigned>(&_event, ~(STATE_BLOCK | STATE_WAKEUP));
-    }
-    return true;
-  }
-
-  VirtualCpu(VCpu *_last, Motherboard &mb) : VCpu(_last), _mb(mb), _event(0), _sipi(~0u) {
-    MessageHostOp msg(this);
-    if (!mb.bus_hostop.send(msg)) Logging::panic("could not create VCpu backend.");
-    _hostop_id = msg.value;
-    _reset_tsc_off = -Cpu::rdtsc();
-
-    // add to the busses
-    executor. add(this, VirtualCpu::receive_static<CpuMessage>);
-    executor.add_iothread_callback(this, VirtualCpu::claim_static<CpuMessage>);
-    bus_event.add(this, VirtualCpu::receive_static<CpuEvent>);
-    mem.      add(this, VirtualCpu::receive_static<MessageMem>);
-    mem.add_iothread_callback(this, VirtualCpu::claim_static<MessageMem>);
-    memregion.add(this, VirtualCpu::receive_static<MessageMemRegion>);
-    mb.bus_legacy.add(this, VirtualCpu::receive_static<MessageLegacy>);
-    bus_lapic.add(this, VirtualCpu::receive_static<LapicEvent>);
-
-    CPUID_reset();
-  }
+	VirtualCpu(VCpu *_last, Motherboard &mb);
 };
 
-PARAM_HANDLER(vcpu,
-	      "vcpu - create a new VCPU")
+
+bool VirtualCpu::receive(CpuMessage &msg)
 {
-  mb.last_vcpu = new VirtualCpu(mb.last_vcpu, mb);
+	if (msg.type == CpuMessage::TYPE_ADD_TSC_OFF) {
+		_reset_tsc_off += msg.current_tsc_off;
+		return true;
+	}
+
+	// TSC drift compensation.
+	if (   ( msg.type != CpuMessage::TYPE_CPUID_WRITE)
+	    && ( msg.mtr_in  & MTD_TSC)
+	    && (~msg.mtr_out & MTD_TSC))
+	{
+		COUNTER_INC("tsc adoption");
+		msg.current_tsc_off = _reset_tsc_off;
+		msg.cpu->tsc_off    = msg.current_tsc_off - msg.cpu->tsc_off;
+		msg.mtr_out |= MTD_TSC;
+	}
+
+	switch (msg.type) {
+	case CpuMessage::TYPE_CPUID_WRITE:
+	{
+		unsigned reg = (msg.nr << 4) | msg.reg | (msg.nr & 0x80000000);
+		unsigned old = 0;
+
+		assert(msg.reg < 0x10);
+
+		if (CPUID_read (reg, old) &&
+		    CPUID_write(reg, (old & msg.mask) | msg.value))
+		{
+			CPUID_read(reg, old);
+			return true;
+		}
+
+		return false;
+	}
+	case CpuMessage::TYPE_TRIPLE:
+		msg.cpu->actv_state = 2;
+		if (!is_ap())
+			got_event(EVENT_RESET);
+		break;
+	case CpuMessage::TYPE_HLT:
+		assert(!msg.cpu->actv_state);
+		msg.cpu->actv_state = 1;
+		break;
+	case CpuMessage::TYPE_CALC_IRQWINDOW:
+	{
+		assert(msg.mtr_out & MTD_INJ);
+		unsigned new_event = _event;
+		msg.cpu->inj_info &= ~INJ_WIN;
+
+		if (new_event & EVENT_INTR) msg.cpu->inj_info |= INJ_IRQWIN;
+		if (new_event & EVENT_NMI)  msg.cpu->inj_info |= INJ_NMIWIN;
+
+		return true;
+	}
+	case CpuMessage::TYPE_CPUID: return handle_cpuid(msg);
+	case CpuMessage::TYPE_CHECK_IRQ: break; // we handle it later on
+	case CpuMessage::TYPE_RDTSC: handle_rdtsc(msg); return true;
+	case CpuMessage::TYPE_RDMSR: handle_rdmsr(msg); return true;
+	case CpuMessage::TYPE_WRMSR: handle_wrmsr(msg); return true;
+	case CpuMessage::TYPE_IOIN:  handle_ioin(msg); return true;
+	case CpuMessage::TYPE_IOOUT: handle_ioout(msg); return true;
+	case CpuMessage::TYPE_INIT:  got_event(EVENT_INIT); return true;
+	case CpuMessage::TYPE_SINGLE_STEP:
+	case CpuMessage::TYPE_WBINVD:
+	case CpuMessage::TYPE_INVD:
+	case CpuMessage::TYPE_ADD_TSC_OFF:
+	default:
+		return false;
+	}
+
+	// handle IRQ injection
+	for (prioritize_events(msg); msg.cpu->actv_state & 0x3; prioritize_events(msg)) {
+		MessageHostOp msg2(MessageHostOp::OP_VCPU_BLOCK, _hostop_id);
+		Cpu::atomic_or<volatile unsigned>(&_event, STATE_BLOCK);
+		if (~_event & STATE_WAKEUP) _mb.bus_hostop.send(msg2);
+		Cpu::atomic_and<volatile unsigned>(&_event, ~(STATE_BLOCK | STATE_WAKEUP));
+	}
+
+	return true;
 }
+
+
+VirtualCpu::VirtualCpu(VCpu *_last, Motherboard &mb)
+: VCpu(_last), _mb(mb), _event(0), _sipi(~0u)
+{
+	MessageHostOp msg(this);
+	if (!mb.bus_hostop.send(msg))
+		Logging::panic("could not create VCpu backend.");
+
+	_hostop_id     = msg.value;
+	_reset_tsc_off = -Cpu::rdtsc();
+
+	executor.add_iothread_callback(this, VirtualCpu::claim_static<CpuMessage>);
+	mem     .add_iothread_callback(this, VirtualCpu::claim_static<MessageMem>);
+
+	executor .add(this, VirtualCpu::receive_static<CpuMessage>);
+	bus_event.add(this, VirtualCpu::receive_static<CpuEvent>);
+	mem      .add(this, VirtualCpu::receive_static<MessageMem>);
+	memregion.add(this, VirtualCpu::receive_static<MessageMemRegion>);
+	bus_lapic.add(this, VirtualCpu::receive_static<LapicEvent>);
+
+	mb.bus_legacy.add(this, VirtualCpu::receive_static<MessageLegacy>);
+
+	CPUID_reset();
+}
+
+PARAM_HANDLER(vcpu, "vcpu - create a new VCPU")
+{
+	mb.last_vcpu = new VirtualCpu(mb.last_vcpu, mb);
+}
+
 #else
-VMM_REGSET(CPUID,
-       VMM_REG_RW(CPUID_EAX0,  0x00, 2, ~0u,)
-       VMM_REG_RW(CPUID_EBX0,  0x01, 0, ~0u,)
-       VMM_REG_RW(CPUID_ECX0,  0x02, 0, ~0u,)
-       VMM_REG_RW(CPUID_EDX0,  0x03, 0, ~0u,)
-       VMM_REG_RW(CPUID_EAX1,  0x10, 0x673, ~0u,)
-       VMM_REG_RW(CPUID_EBX1,  0x11, 1u << 16, ~0u,) /* max of logical CPU ids - disable SMT */
-       VMM_REG_RW(CPUID_ECX1,  0x12, 0, ~0u,)
-       VMM_REG_RW(CPUID_EDX1,  0x13, 0, ~0u,)
-       VMM_REG_RW(CPUID_EDXb,  0xb3, 0, ~0u,)
+
+  /*
+   * Calculation of second argument:
+   *
+   *   VMM_REG_RW(<name>, (X << 4) | EXX + subleaf * 4, <number>, <number>) 
+   *
+   *   X       is cpuid index, e.g eax on invocation of cpuid
+   *   EXX     is id of the register, e.g.
+   *           (EAX = 0) or (EBX = 1) or (ECX = 2) or (EDX = 3)
+   *   subleaf is value of ecx on invocation of cpuid, 0 to 3 is supported by now
+   */
+  VMM_REGSET(CPUID,
+       VMM_REG_RW(CPUID_EAX_0,  0x00, 2, ~0u,)
+       VMM_REG_RW(CPUID_EBX_0,  0x01, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_0,  0x02, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_0,  0x03, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_1,  0x10, 0x673, ~0u,)
+       VMM_REG_RW(CPUID_EBX_1,  0x11, 1u << 16, ~0u,) /* max of logical CPU ids - disable SMT */
+       VMM_REG_RW(CPUID_ECX_1,  0x12, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_1,  0x13, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EDX_b,  0xb3, 0, ~0u,)
+
+#if 1
+       VMM_REG_RW(CPUID_EAX_2,  0x20, 0, ~0u,)
+       VMM_REG_RW(CPUID_EBX_2,  0x21, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_2,  0x22, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_2,  0x23, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_3,  0x30, 0, ~0u,)
+       VMM_REG_RW(CPUID_EBX_3,  0x31, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_3,  0x32, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_3,  0x33, 0, ~0u,)
+#endif
+
+       VMM_REG_RW(CPUID_EAX_7_s0,  0x70, 0, ~0u,) /* subleaf with ecx = 0 */
+       VMM_REG_RW(CPUID_EBX_7_s0,  0x71, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_7_s0,  0x72, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_7_s0,  0x73, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_7_s1,  0x74, 0, ~0u,) /* subleaf with ecx = 1 */
+       VMM_REG_RW(CPUID_EBX_7_s1,  0x75, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_7_s1,  0x76, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_7_s1,  0x77, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_7_s2,  0x78, 0, ~0u,) /* subleaf with ecx = 2 */
+       VMM_REG_RW(CPUID_EBX_7_s2,  0x79, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_7_s2,  0x7a, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_7_s2,  0x7b, 0, ~0u,)
+
+#if 0
+       VMM_REG_RW(CPUID_EAX_d_s0,  0xd0, 0, ~0u,) /* subleaf with ecx = 0 */
+       VMM_REG_RW(CPUID_EBX_d_s0,  0xd1, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_d_s0,  0xd2, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_d_s0,  0xd3, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_d_s1,  0xd4, 0, ~0u,) /* subleaf with ecx = 1 */
+       VMM_REG_RW(CPUID_EBX_d_s1,  0xd5, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_d_s1,  0xd6, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_d_s1,  0xd7, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_d_s2,  0xd8, 0, ~0u,) /* subleaf with ecx = 2 */
+       VMM_REG_RW(CPUID_EBX_d_s2,  0xd9, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_d_s2,  0xda, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_d_s2,  0xdb, 0, ~0u,)
+
+       VMM_REG_RW(CPUID_EAX_d_s3,  0xdc, 0, ~0u,) /* subleaf with ecx = 3 */
+       VMM_REG_RW(CPUID_EBX_d_s3,  0xdd, 0, ~0u,)
+       VMM_REG_RW(CPUID_ECX_d_s3,  0xde, 0, ~0u,)
+       VMM_REG_RW(CPUID_EDX_d_s3,  0xdf, 0, ~0u,)
+#endif
+
        VMM_REG_RW(CPUID_EAX80, 0x80000000, 0x80000004, ~0u,)
        VMM_REG_RW(CPUID_EBX80, 0x80000001, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX80, 0x80000002, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX80, 0x80000003, 0, ~0u,)
+
        VMM_REG_RW(CPUID_EAX81, 0x80000010, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX81, 0x80000011, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX81, 0x80000012, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX81, 0x80000013, 0, ~0u,)
+
        VMM_REG_RW(CPUID_EAX82, 0x80000020, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX82, 0x80000021, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX82, 0x80000022, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX82, 0x80000023, 0, ~0u,)
+
        VMM_REG_RW(CPUID_EAX83, 0x80000030, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX83, 0x80000031, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX83, 0x80000032, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX83, 0x80000033, 0, ~0u,)
+
        VMM_REG_RW(CPUID_EAX84, 0x80000040, 0, ~0u,)
        VMM_REG_RW(CPUID_EBX84, 0x80000041, 0, ~0u,)
        VMM_REG_RW(CPUID_ECX84, 0x80000042, 0, ~0u,)
        VMM_REG_RW(CPUID_EDX84, 0x80000043, 0, ~0u,))
+
 #endif

@@ -116,8 +116,8 @@ struct Utcb
       };
       unsigned long long qual[2];
       unsigned     ctrl[2];
-      long long reserved;
       mword    cr0, cr2, cr3, cr4;
+      unsigned long long xcr0, xss;
       mword pdpte[4];
 #ifdef __x86_64__
       mword        cr8;
@@ -127,8 +127,8 @@ struct Utcb
       mword        cstar;
       mword        fmask;
       mword        kernel_gs;
-      uint32       : 32;          // reserved (tpr)
-      uint32       : 32;          // reserved (tpr_threshold)
+      uint32       tpr;
+      uint32       tpr_threshold;
 #endif
       mword     dr7, sysenter_cs, sysenter_esp, sysenter_eip;
       Descriptor   es, cs, ss, ds, fs, gs;

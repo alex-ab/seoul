@@ -654,8 +654,9 @@ public:
 
       if (_cpu->rsp != _oesp) _mtr_out |= MTD_RSP;
 
-      // XXX bugs?
-      _mtr_out |= _mtr_in & ~(MTD_CR | MTD_TSC);
+      // XXX bugs? - too many state is transferred back when, e.g. XSAVE
+      _mtr_out |= _mtr_in & ~(MTD_CR | MTD_TSC | MTD_XSAVE);
+
       return true;
     }
 

@@ -48,6 +48,9 @@ enum {
   MTD_PDPTE           = 1ul << 21,
   MTD_R8_R15          = 1ul << 22,
   MTD_SYSCALL_SWAPGS  = 1ul << 23,
+  MTD_TPR             = 1ul << 24,
+  MTD_TSC_AUX         = 1ul << 25, /* IA32_TSC_AUX used by rdtscp */
+  MTD_XSAVE           = 1ul << 26,
   MTD_IRQ             = MTD_RFLAGS | MTD_STATE | MTD_INJ | MTD_TSC,
   MTD_ALL             = (0x000fffffu & ~MTD_CTRL) | MTD_EFER | MTD_R8_R15 | MTD_SYSCALL_SWAPGS
 };
