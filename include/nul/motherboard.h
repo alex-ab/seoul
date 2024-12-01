@@ -83,6 +83,8 @@ class Motherboard
   DBus<MessageTimer>        bus_timer { };      ///< Request for timers
   DBus<MessageVesa>         bus_vesa { };
   DBus<MessageAudio>        bus_audio { };
+  DBus<MessageFs>           bus_fs { };
+  DBus<MessageFsCommit>     bus_fs_commit { };
 
   DBus<MessageRestore>      bus_restore { };
 
