@@ -9,15 +9,15 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * Copyright (C) 2021-2024 Alexander Boettcher
+ * Copyright (C) 2021-2025 Alexander Boettcher
  *
- * This file is part of Seoul/Vancouver.
+ * This file is part of Seoul.
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -915,4 +915,138 @@ struct MessageAudio
 	MessageAudio(Type const t, unsigned i) : type(t), id(i) { }
 	MessageAudio(Type const t, uintptr_t d, unsigned s, unsigned c)
 	: type(t), data(d), size(s), consumed(c) { }
+};
+
+struct MessageFs
+{
+	enum Type {
+		INIT, LOOKUP, GET_ATTR, SYNC, CREATE, UNLINK,
+		OPEN_DIR, READ_DIR, CLOSE_DIR, MAKE_DIR, REMOVE_DIR,
+		OPEN_FILE, READ_FILE, WRITE_FILE, CLOSE_FILE
+	};
+
+	unsigned  const fs_id;
+	enum Type const type;
+	uint64          nodeid;
+	unsigned  const queue;
+
+	uint64          fh { };
+
+	struct Buffer {
+		uintptr_t start;
+		uint64    size;
+		uint64    offset;
+	} buffer { };
+
+	union {
+		struct {
+			bool readable;
+			bool writeable;
+			bool executable;
+		};
+	};
+
+	uint32 const file_type_dir;
+	uint32 const file_type_sym;
+	uint32 const file_type_regular;
+
+	unsigned const e_off_dirsize;
+	unsigned const e_off_inode;
+	unsigned const e_off_type;
+	unsigned const e_off_name;
+
+	unsigned const align_offset;
+
+	MessageFs(Type const t, unsigned fsid, uint64 node = 0, unsigned q = 0,
+	          uint32 ftd = 0, uint32 fts = 0, uint32 ftr = 0,
+	          unsigned ed = 0, unsigned ei = 0, unsigned et = 0, unsigned en = 0,
+	          unsigned algn_off = 0)
+	:
+		fs_id(fsid), type(t), nodeid(node), queue(q),
+		file_type_dir(ftd), file_type_sym(fts), file_type_regular(ftr),
+		e_off_dirsize(ed), e_off_inode(ei), e_off_type(et), e_off_name(en),
+		align_offset(algn_off)
+	{ }
+
+	void fail()     { fh = ~0ull; }
+	bool ok() const { return fh != ~0ull; }
+
+	auto align(auto value, auto a) const { return (value + (a - 1)) & ~(a - 1); }
+
+	void empty_read_dir() { buffer.offset = buffer.size; }
+	bool read_dir_empty() { return buffer.offset == buffer.size; }
+
+	uint32 file_type(bool t_dir, bool t_sym) const
+	{
+		if (t_dir) return file_type_dir;
+		if (t_sym) return file_type_sym;
+		return file_type_regular;
+	}
+
+	bool add_read_dir(char const * const dir, unsigned dir_size, uint64 inode,
+	                  bool t_dir = false, bool t_sym = false)
+	{
+		unsigned const zero = 1;
+
+		if (!buffer.start || !buffer.size || buffer.offset >= buffer.size)
+			return false;
+
+		if (buffer.offset + e_off_name + dir_size + zero >= buffer.size)
+			return false;
+
+		if (e_off_inode > e_off_name)
+			return false;
+
+		auto const buf = buffer.start + buffer.offset;
+
+		auto * ds  = reinterpret_cast<unsigned *>(buf + e_off_dirsize);
+		void * ptr = reinterpret_cast<void *>(buf + e_off_name);
+		char * ter = reinterpret_cast<char *>(buf + e_off_name + dir_size);
+		auto * ino = reinterpret_cast<uint64 *>(buf + e_off_inode);
+		auto * typ = reinterpret_cast<uint32 *>(buf + e_off_type);
+
+		__builtin_memcpy(ptr, dir, dir_size);
+
+		*ds  = dir_size + zero;
+		*ino = inode;
+		*typ = file_type(t_dir, t_sym);
+
+		if (zero)
+			*ter = 0;
+
+		buffer.offset += e_off_name + dir_size + zero;
+
+		if (align_offset)
+			buffer.offset = align(buffer.offset, align_offset);
+
+		return true;
+	}
+
+	bool add_status(uint64 f, uint64 f_size, uint64 mod_time, bool t_dir, bool t_sym)
+	{
+		fh = f;
+		buffer.start  = mod_time;
+		buffer.size   = f_size;
+		buffer.offset = file_type(t_dir, t_sym);
+
+		return true;
+	}
+
+	uint32 status_file_type() const { return uint32(buffer.offset); }
+	uint64 status_file_size() const { return buffer.size;   }
+	uint64 status_mod_time()  const { return buffer.start;  }
+};
+
+struct MessageFsCommit
+{
+	unsigned const fs_id;
+	uint64   const nodeid;
+
+	bool more_read_dirs { };
+
+	MessageFs fs_delayed;
+
+	MessageFsCommit(unsigned i, uint64 id, MessageFs const &fs)
+	: fs_id(i), nodeid(id), fs_delayed(fs)
+	{ }
 };
