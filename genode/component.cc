@@ -56,6 +56,7 @@
 #include "gui.h"
 #include "audio.h"
 #include "xhci.h"
+#include "file.h"
 
 
 enum { verbose_debug = false };
@@ -1873,6 +1874,12 @@ void Component::construct(Genode::Env &env)
 	                         guest_memory.backing_store_local_base(),
 	                         guest_memory.backing_store_size(),
 	                         vmm.config.node());
+
+	vmm.config.node().with_optional_sub_node("machine", [&] (auto const &node) {
+		node.with_optional_sub_node("virtio_fs", [&](auto const &) {
+			static Seoul::Filesystem files(env, machine.motherboard());
+		});
+	});
 
 	vmm.config.node().with_sub_node("machine",
 		[&] (auto const &sub_node) { machine.setup_devices(vmm.config.node(), sub_node); },
