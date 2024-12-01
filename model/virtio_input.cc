@@ -507,8 +507,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 };
 
 PARAM_HANDLER(virtio_input,
-	      "virtio_input:mem,irq,xmax,ymax - attach an virtio input to the PCI bus",
-	      "Example: 'virtio_input:0xe0200000,0x30,4096,4096'",
+	      "virtio_input:mem,xmax,ymax - attach an virtio input to the PCI bus",
+	      "Example: 'virtio_input:0xe0200000,4096,4096'",
 	      "If no bdf is given a free one is used.")
 {
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
@@ -520,7 +520,7 @@ PARAM_HANDLER(virtio_input,
 	auto const bar_base = argv[0];
 
 	if (argv[0] == ~0UL)
-		Logging::panic("virtio_gpu: missing bar address");
+		Logging::panic("virtio_input: missing bar address");
 
 	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_memregion,
 	                                     bar_base, irq_pin, irq_line,
