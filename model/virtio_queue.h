@@ -166,7 +166,8 @@ class Virtio::Queue
 
 					update = true;
 				} catch (...) {
-					Logging::panic("unhandled exception in virtio device\n");
+					Logging::printf("unhandled exception in virtio device\n");
+//					Logging::panic("unhandled exception in virtio device\n");
 					throw;
 				}
 			}

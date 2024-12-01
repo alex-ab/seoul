@@ -56,6 +56,7 @@
 #include "gui.h"
 #include "audio.h"
 #include "xhci.h"
+#include "file.h"
 
 
 enum { verbose_debug = false };
@@ -647,9 +648,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			if (~mtd & msg.mtr_out)
-				Genode::error("mtd issue !? exit=", Genode::Hex(state.exit_reason),
-				              " ", Genode::Hex(mtd), "->", Genode::Hex(msg.mtr_out),
-				              " ", Genode::Hex(~mtd & msg.mtr_out));
+				Genode::warning("mtd issue !? exit=", Genode::Hex(state.exit_reason),
+				                " ", Genode::Hex(mtd), "->", Genode::Hex(msg.mtr_out),
+				                " ", Genode::Hex(~mtd & msg.mtr_out));
 
 			/* convert Seoul state to Genode VM state */
 			Seoul::write_vcpu_state(_seoul_state, msg.mtr_out, state);
@@ -1879,6 +1880,12 @@ void Component::construct(Genode::Env &env)
 	                         guest_memory.backing_store_local_base(),
 	                         guest_memory.backing_store_size(),
 	                         vmm.config.node());
+
+	vmm.config.node().with_optional_sub_node("machine", [&] (auto const &node) {
+		node.with_optional_sub_node("virtio_fs", [&](auto const &) {
+			static Seoul::Filesystem files(env, machine.motherboard());
+		});
+	});
 
 	vmm.config.node().with_sub_node("machine",
 		[&] (auto const &sub_node) { machine.setup_devices(vmm.config.node(), sub_node); },
