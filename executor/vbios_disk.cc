@@ -72,34 +72,38 @@ class VirtualBiosDisk : public StaticReceiver<VirtualBiosDisk>, public BiosCommo
     return false;
   }
 
-  /**
-   * Read/Write disk helper.
-   */
-  bool disk_op(MessageBios &msg, unsigned disk_nr, unsigned long long blocknr, uintptr_t address, size_t count, bool write)
-  {
-    DmaDescriptor dma;
-    dma.bytecount  = 512*count;
-    dma.byteoffset = address;
+	/**
+	 * Read/Write disk helper.
+	 */
+	bool disk_op(MessageBios &msg, unsigned disk_nr,
+	             unsigned long long blocknr, uintptr_t address,
+	             size_t count, bool write)
+	{
+		DmaDescriptor dma = { .byteoffset = address, .bytecount = 512 * count };
 
-    MessageDisk msg2(write ? MessageDisk::DISK_WRITE : MessageDisk::DISK_READ, disk_nr, MAGIC_DISK_TAG, blocknr, 1, &dma, 0, ~0ul, 0);
-    if (!_mb.bus_disk.send(msg2) || msg2.error)
-      {
-	Logging::printf("msg2.error %x\n", msg2.error);
-	error(msg, 0x01);
-	return true;
-      }
-    else
-      {
-	_diskop_inprogress = true;
+		MessageDisk msg2(write ? MessageDisk::DISK_WRITE : MessageDisk::DISK_READ,
+		                 disk_nr, MAGIC_DISK_TAG, blocknr, 1, &dma, 0, ~0ul, 0);
 
-	// wait for completion needed for AHCI backend!
-	// prog timeout during wait
-	MessageTimer msg3(_timer, _mb.clock()->abstime(DISK_TIMEOUT, FREQ));
-	_mb.bus_timer.send(msg3);
+		if (!_mb.bus_disk.send(msg2) || msg2.error) {
+			Logging::printf("msg2.error %x\n", msg2.error);
+			error(msg, 0x01);
+			return true;
+		}
 
-	return jmp_int(msg, 0x76);
-      }
-  }
+		MessageDisk msg4(MessageDisk::DISK_ALL_REQ_DONE,
+			             disk_nr, 0ul, 0ull, 0u, nullptr, 0ul, ~0ul, 0ul);
+		bool const ok = _mb.bus_disk.send(msg4);
+		assert(ok);
+
+		_diskop_inprogress = true;
+
+		// wait for completion needed for AHCI backend!
+		// prog timeout during wait
+		MessageTimer msg3(_timer, _mb.clock()->abstime(DISK_TIMEOUT, FREQ));
+		_mb.bus_timer.send(msg3);
+
+		return jmp_int(msg, 0x76);
+	}
 
 
   bool boot_from_disk(MessageBios &msg)

@@ -698,7 +698,8 @@ struct MessageDisk
       DISK_GET_PARAMS,
       DISK_READ,
       DISK_WRITE,
-      DISK_FLUSH_CACHE
+      DISK_FLUSH_CACHE,
+      DISK_ALL_REQ_DONE
     } type;
   unsigned disknr;
   union
