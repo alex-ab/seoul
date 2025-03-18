@@ -146,6 +146,7 @@ class SataDrive : public FisReceiver, public StaticReceiver<SataDrive>
 		Job_result _do_operation(struct Operation &);
 
 		void receive_fis(size_t fislen, unsigned *fis) override;
+		void receive_done() override;
 
 		/*
 		 * Noncopyable
@@ -299,7 +300,7 @@ void SataDrive::_readwrite_sectors(bool const read, bool const lba48_ext)
 		Logging::printf("resume operation pending - bug ahead\n");
 
 	Operation new_job = { .sector = sector, .len = len, .prd = 0,
-	                .lastoffset = 0, .read = read };
+	                      .lastoffset = 0, .read = read };
 
 	switch (_do_operation(new_job)) {
 	case Job_result::JOB_OK:
@@ -523,6 +524,15 @@ void SataDrive::_execute_sata_command()
 	default:
 		Logging::panic("should execute command %x\n", _regs[0] >> 16);
 	}
+}
+
+
+void SataDrive::receive_done()
+{
+	MessageDisk msg(MessageDisk::DISK_ALL_REQ_DONE,
+		            _hostdisk, 0ul, 0ull, 0u, nullptr, 0ul, ~0ul, 0ul);
+	bool const ok = _bus_disk.send(msg);
+	assert(ok);
 }
 
 
