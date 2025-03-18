@@ -43,4 +43,5 @@ class FisReceiver
 		FisReceiver() {}
 
 		virtual void receive_fis(size_t fislen, unsigned *fis) = 0;
+		virtual void receive_done() = 0;
 };

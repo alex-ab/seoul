@@ -299,6 +299,14 @@ bool Seoul::Disk::receive(MessageDisk &msg)
 
 		return true;
 	}
+	case MessageDisk::DISK_ALL_REQ_DONE:
+	{
+		Genode::Mutex::Guard guard(disk.mutex);
+
+		disk.blk_con->tx()->wakeup();
+
+		return true;
+	}
 	case MessageDisk::DISK_WRITE:
 		/* don't write on read only medium */
 		if (!disk.info.writeable) {
@@ -411,9 +419,6 @@ bool Seoul::Disk::execute(bool const write, Disk_session &disk,
 			tx.release_packet(p);
 			fn_resume();
 		}
-
-		if (success && !msg.more)
-			tx.wakeup();
 
 		return true;
 	}, [&](auto /* temporary insufficient space in packet stream */) {
