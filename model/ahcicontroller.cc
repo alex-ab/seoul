@@ -40,11 +40,12 @@ class ParentIrqProvider
 class AhciPort : public FisReceiver
 {
 #include "model/simplemem.h"
-  FisReceiver       * _drive  { };
-  ParentIrqProvider * _parent { };
-  unsigned _ccs;
-  unsigned _inprogress;
-  bool _need_initial_fis;
+	FisReceiver       * _drive  { };
+	ParentIrqProvider * _parent { };
+
+	unsigned            _ccs              { };
+	unsigned            _inprogress       { };
+	bool                _need_initial_fis { };
 
 	DBus<MessageMemRegion>  *_bus_memregion { };
 	DBus<MessageMem>        *_bus_mem       { };
@@ -52,11 +53,11 @@ class AhciPort : public FisReceiver
 #define  VMM_REGBASE "../model/ahcicontroller.cc"
 #include "model/reg.h"
 
-  /*
-   * Noncopyable
-   */
-  AhciPort(AhciPort const &);
-  AhciPort &operator = (AhciPort const &);
+	/*
+	 * Noncopyable
+	 */
+	AhciPort(AhciPort const &);
+	AhciPort &operator = (AhciPort const &);
 
 public:
 
@@ -67,6 +68,7 @@ public:
     _bus_mem = bus_mem;
   }
 
+  void receive_done() override { }
 
   /**
    * Receive a FIS from the Device.
@@ -179,54 +181,57 @@ public:
     }
   }
 
+	unsigned execute_command(unsigned);
 
-  unsigned execute_command(unsigned value)
-  {
-    COUNTER_INC("ahci cmd");
+	AhciPort() { AhciPort_reset(); }
 
-      // try to execute all active commands
-      for (unsigned i = 0; i < 32; i++)
-	{
-	  unsigned slot = (_ccs >= 31) ? 0 : _ccs + 1;
-	  _ccs = slot;
-
-	  // XXX check for busy bit
-	  if (value & ~_inprogress & (1 << slot))
-	    {
-	      enum { TFD_BUSY = 0x80 };
-	      if (PxTFD & TFD_BUSY) break;
-
-	      _inprogress |= 1 << slot;
-
-	      unsigned  cl[4];
-	      copy_in(*_bus_memregion, *_bus_mem, PxCLB + slot * 0x20, cl, sizeof(cl));
-	      unsigned clflags  = cl[0];
-
-	      unsigned ct[32];
-	      copy_in(*_bus_memregion, *_bus_mem, cl[2], ct, (clflags & 0x1f) * sizeof(unsigned));
-	      assert(~clflags & 0x20 && "ATAPI unimplemented");
-
-	      // send a dma_setup_fis
-	      // we reuse the reserved fields to send the PRD count and the slot
-	      unsigned dsf[7] = { FIS_TYPE_DMA_SETUP, cl[2] + 0x80, 0,
-	                          clflags >> 16, 0, cl[1], slot+1};
-	      _drive->receive_fis(7, dsf);
-
-	      // set BSY
-	      PxTFD |= TFD_BUSY;
-	      _drive->receive_fis(clflags & 0x1f, ct);
-	    }
-	}
-      // make _css known
-      PxCMD = (PxCMD & ~0x1f00) | ((_ccs & 0x1f) << 8);
-      return 0;
-  }
-
-
-  AhciPort() : _ccs(), _inprogress(), _need_initial_fis() { AhciPort_reset(); };
-
-  virtual ~AhciPort() { }
+	virtual ~AhciPort() { }
 };
+
+unsigned AhciPort::execute_command(unsigned const value)
+{
+	COUNTER_INC("ahci cmd");
+
+	// try to execute all active commands
+	for (unsigned i = 0; i < 32; i++) {
+
+		unsigned slot = (_ccs >= 31) ? 0 : _ccs + 1;
+		_ccs = slot;
+
+		// XXX check for busy bit
+		if (!(value & ~_inprogress & (1 << slot)))
+			continue;
+
+		enum { TFD_BUSY = 0x80 };
+		if (PxTFD & TFD_BUSY) break;
+
+		_inprogress |= 1 << slot;
+
+		unsigned  cl[4];
+		copy_in(*_bus_memregion, *_bus_mem, PxCLB + slot * 0x20, cl, sizeof(cl));
+		unsigned clflags  = cl[0];
+
+		unsigned ct[32];
+		copy_in(*_bus_memregion, *_bus_mem, cl[2], ct, (clflags & 0x1f) * sizeof(unsigned));
+		assert(~clflags & 0x20 && "ATAPI unimplemented");
+
+		// send a dma_setup_fis
+		// we reuse the reserved fields to send the PRD count and the slot
+		unsigned dsf[7] = { FIS_TYPE_DMA_SETUP, cl[2] + 0x80, 0,
+		                    clflags >> 16, 0, cl[1], slot+1};
+		_drive->receive_fis(7, dsf);
+
+		// set BSY
+		PxTFD |= TFD_BUSY;
+		_drive->receive_fis(clflags & 0x1f, ct);
+	}
+
+	_drive->receive_done();
+
+	// make _css known
+	PxCMD = (PxCMD & ~0x1f00) | ((_ccs & 0x1f) << 8);
+	return 0;
+}
 
 #else
 #ifndef AHCI_CONTROLLER
