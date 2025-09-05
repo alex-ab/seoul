@@ -391,7 +391,6 @@ class VirtualCpu : public VCpu, public StaticReceiver<VirtualCpu>
       case IA32_PMC1:
         break;
       case IA32_XSS:
-        assert(msg.mtr_in & MTD_XSAVE);
         cpu->xss = cpu->edx_eax();
         msg.mtr_out |= MTD_XSAVE;
         break;

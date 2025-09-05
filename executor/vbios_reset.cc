@@ -455,7 +455,7 @@ public:
 
 			size_t const needed_len = msg.offset + msg.count;
 
-			with_resource(msg.resource, [&](auto &r) {
+			return with_resource(msg.resource, [&](auto &r) {
 				return _write_resource(r, msg);
 			});
 		}
