@@ -23,13 +23,70 @@
 #include "virtio_pci.h"
 
 
+#define S_IFMT  00170000
+#define S_IFSOCK 0140000
+#define S_IFLNK	 0120000
+#define S_IFREG  0100000
+#define S_IFBLK  0060000
+#define S_IFDIR  0040000
+#define S_IFCHR  0020000
+#define S_IFIFO  0010000
+#define S_ISUID  0004000
+#define S_ISGID  0002000
+#define S_ISVTX  0001000
+
+#define S_ISLNK(m)	(((m) & S_IFMT) == S_IFLNK)
+#define S_ISREG(m)	(((m) & S_IFMT) == S_IFREG)
+#define S_ISDIR(m)	(((m) & S_IFMT) == S_IFDIR)
+#define S_ISCHR(m)	(((m) & S_IFMT) == S_IFCHR)
+#define S_ISBLK(m)	(((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m)	(((m) & S_IFMT) == S_IFIFO)
+#define S_ISSOCK(m)	(((m) & S_IFMT) == S_IFSOCK)
+
 /**********************
  * Structures of FUSE *
  **********************/
 
-enum fuse_opcode {
-	FUSE_INIT = 26,
+enum fuse_opcode
+{
+	FUSE_LOOKUP  =  1,
+	FUSE_FORGET  =  2,
+	FUSE_GETATTR =  3,
+	FUSE_INIT    = 26,
+	FUSE_OPENDIR = 27,
+	FUSE_READDIR = 28,
+	FUSE_RELDIR  = 29,
 };
+
+struct fuse_attr {
+	uint64 ino;
+	uint64 size;
+	uint64 blocks;
+	uint64 atime;
+	uint64 mtime;
+	uint64 ctime;
+	uint32 atimensec;
+	uint32 mtimensec;
+	uint32 ctimensec;
+	uint32 mode;
+	uint32 nlink;
+	uint32 uid;
+	uint32 gid;
+	uint32 rdev;
+	uint32 blksize;
+	uint32 flags;
+} __attribute__((packed));
+
+struct fuse_open_in {
+	uint32 flags;
+	uint32 open_flags;
+} __attribute__((packed));
+
+struct fuse_open_out {
+	uint64 fh;
+	uint32 open_flags;
+	uint32 padding;
+} __attribute__((packed));
 
 struct fuse_in_header {
 	uint32 len;
@@ -49,7 +106,6 @@ struct fuse_out_header {
 	uint64 unique;
 } __attribute__((packed));
 
-
 struct fuse_init_in {
 	uint32 major;
 	uint32 minor;
@@ -59,6 +115,44 @@ struct fuse_init_in {
 	uint32 unused[11];
 } __attribute__((packed));
 
+struct fuse_init_out {
+	uint32 major;
+	uint32 minor;
+	uint32 max_readahead;
+	uint32 flags;
+	uint32 unused[12];
+} __attribute__((packed));
+
+struct fuse_getattr_in {
+	uint32 getattr_flags;
+	uint32 dummy;
+	uint64 fh;
+} __attribute__((packed));
+
+struct fuse_attr_out {
+	uint64 attr_valid;
+	uint32 attr_valid_nsec;
+	uint32 dummy;
+	struct fuse_attr attr;
+} __attribute__((packed));
+
+struct fuse_dirent {
+	uint64 ino;
+	uint64 off;
+	uint32 namelen;
+	uint32 type;
+	char   name[];
+} __attribute__((packed));
+
+struct fuse_entry_out {
+	uint64 nodeid;		/* Inode ID */
+	uint64 generation;	/* Inode generation: nodeid:gen must be unique for the fs's lifetime */
+	uint64 entry_valid;	/* Cache timeout for the name */
+	uint64 attr_valid;	/* Cache timeout for the attributes */
+	uint32 entry_valid_nsec;
+	uint32 attr_valid_nsec;
+	struct fuse_attr attr;
+};
 
 /* Virtio spec 1.2, 5.11 File system, 5.11.4 Device configuration layout */
 struct Virtio_fs_config
@@ -163,64 +257,7 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 			});
 		}
 
-		void notify (unsigned queue) override
-		{
-			/*
-			 * queue 0 (hipro)
-			 * queue 1 (notification) - iif VIRTIO_FS_F_NOTIFICATION negotiated
-			 * queue 2 (request)
-			 */
-			Logging::printf("virtio_fs: notify %u %s", queue,
-			                queue == 0 ? "HIPRO" :
-			                queue == 1 && _fs_config.use_notify_queue ? "NOTIFY" : "REQUEST");
-
-			auto &used_queue = _queues[queue].queue;
-
-			bool inject = used_queue.consume([&] (auto const descriptor, auto) {
-				auto const request = vmm_address(descriptor.addr, descriptor.len);
-				auto const request_size = descriptor.len;
-
-				Logging::printf("request_size %u in_header=%lu out_header=%lu\n",
-				                request_size, sizeof(fuse_in_header),
-				                sizeof(fuse_out_header));
-
-				if (!request || request_size < sizeof(fuse_in_header)) {
-					Logging::printf("virtio_fs, invalid request\n");
-					return 0U;
-				}
-
-				auto const & in = *reinterpret_cast<fuse_in_header *>(request);
-				auto const unique = in.unique;
-
-				Logging::printf("opcode %u len=%u unique=%llx\n",
-				                in.opcode, in.len, unique);
-
-				auto desc1 = used_queue.next_desc(descriptor);
-
-				switch (in.opcode) {
-				case FUSE_INIT:
-					fuse_opcode_init(desc1);
-					break;
-				default:
-					Logging::printf("virtio_fs: unknown opcode %u len=%u unique=%llx\n",
-					                in.opcode, in.len, unique);
-					break;
-				}
-
-				auto & out = *reinterpret_cast<fuse_out_header *>(request);
-				out.len    = sizeof(out);
-				out.error  = 0; /* XXX which ? */
-				out.unique = unique;
-
-				return request_size;
-			});
-
-			if (inject)
-				inject_irq();
-
-			if (inject)
-				Logging::printf("virtio_fs:  inject !\n");
-		}
+		void notify (unsigned queue) override;
 
 		enum { VIRTIO_FS_F_NOTIFICATION = 1 };
 
@@ -255,29 +292,345 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 			reset();
 #endif
 		}
-#if 1
-		bool fuse_opcode_init(auto const &desc)
-		{
-			if (!desc.len)
-				return false;
 
-			auto desc1_addr = vmm_address(desc.addr, desc.len);
-			auto desc1_size = desc.len;
-
-			Logging::printf("next desc1 %u", desc.len);
-
-			if (desc1_size < sizeof(fuse_init_in))
-				return false;
-
-			auto const &init_in = *reinterpret_cast<fuse_init_in *>(desc1_addr);
-
-			Logging::printf("next major %u %u", init_in.major, init_in.minor);
-
-			return true;
-		}
-#endif
+		unsigned fuse_op_init   (auto const &, auto &);
+		unsigned fuse_op_lookup (auto const &, auto &, uint64);
+		unsigned fuse_op_getattr(auto const &, auto &, uint64);
+		unsigned fuse_op_opendir(auto const &, auto &, uint64);
+		unsigned fuse_op_readdir(auto const &, auto &, uint64, int32);
+		unsigned fuse_op_reldir (auto const &, auto &, uint64);
 };
 
+
+void Virtio_fs::notify (unsigned queue)
+{
+	/*
+	 * queue 0 (hipro)
+	 * queue 1 (notification) - iif VIRTIO_FS_F_NOTIFICATION negotiated
+	 * queue 2 (request)
+	 */
+
+	if (queue != 1 && !_fs_config.use_notify_queue)
+	Logging::printf("virtio_fs: notify %u %s", queue,
+	                queue == 0 ? "HIPRO" :
+	                queue == 1 && _fs_config.use_notify_queue ? "NOTIFY" : "REQUEST");
+
+	auto &used_queue = _queues[queue].queue;
+
+	bool inject = used_queue.consume([&] (auto const &desc0, auto) {
+		auto const request      = vmm_address(desc0.addr, desc0.len);
+		auto const request_size = desc0.len;
+
+		if (!request || request_size < sizeof(fuse_in_header)) {
+			Logging::printf("virtio_fs, invalid request\n");
+			return 0U;
+		}
+
+		auto const &in     = *reinterpret_cast<fuse_in_header *>(request);
+		auto const  unique = in.unique;
+
+		if (in.opcode == FUSE_FORGET) {
+			Logging::printf("FUSE_FORGET ? nodeid=%u\n", in.nodeid);
+			return request_size;
+		}
+
+		auto desc1 = used_queue.next_desc(desc0);
+		auto desc2 = used_queue.next_desc(desc1);
+		auto desc3 = used_queue.next_desc(desc2);
+		auto desc4 = used_queue.next_desc(desc3);
+
+		auto const response      = vmm_address(desc2.addr, desc2.len);
+		auto const response_size = desc2.len;
+
+#if 1
+		Logging::printf("next response %u desc3 %u desc4=%u\n", desc2.len, desc3.len, desc4.len);
+#endif
+
+		if (!response || response_size < sizeof(fuse_out_header)) {
+			Logging::printf("virtio_fs, invalid response\n");
+			return 0U;
+		}
+
+		auto res  = 0u;
+		int32 err = 0;
+
+		switch (in.opcode) {
+		case FUSE_INIT   : res = fuse_op_init   (desc1, desc3); break;
+		case FUSE_LOOKUP : res = fuse_op_lookup (desc1, desc3, in.nodeid); break;
+		case FUSE_GETATTR: res = fuse_op_getattr(desc1, desc3, in.nodeid); break;
+		case FUSE_OPENDIR: res = fuse_op_opendir(desc1, desc3, in.nodeid); break;
+		case FUSE_READDIR: res = fuse_op_readdir(desc1, desc3, in.nodeid, err); break;
+		case FUSE_RELDIR : res = fuse_op_reldir (desc1, desc3, in.nodeid); break;
+		default:
+			Logging::printf("virtio_fs: unknown opcode %u len=%u unique=%llx\n",
+			                in.opcode, in.len, unique);
+			break;
+		}
+
+		auto &out  = *reinterpret_cast<fuse_out_header *>(response);
+		out.len    = sizeof(out) + res;
+		out.error  = err;
+		out.unique = unique;
+
+		return request_size;
+	});
+
+	if (inject)
+		inject_irq();
+}
+
+
+unsigned Virtio_fs::fuse_op_init(auto const &in, auto &out)
+{
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	Logging::printf("%s: in %u out %u\n", __func__, in.len, out.len);
+
+	if (in_size < sizeof(fuse_init_in) || out_size < sizeof(fuse_init_out))
+		return 0u;
+
+	auto const &init_in  = *reinterpret_cast<fuse_init_in *>(in_addr);
+	auto       &init_out = *reinterpret_cast<fuse_init_out *>(out_addr);
+
+	Logging::printf("init - %u.%u flags=%x readahead=%llu\n",
+	                init_in.major, init_in.minor, init_in.flags,
+	                init_in.max_readahead);
+
+	memset(&init_out, 0, sizeof(init_out));
+
+	/* XXX which flags needs to be initialized how XXX */
+	init_out.major         = init_in.major;
+	init_out.minor         = init_in.minor;
+	init_out.flags         = 0;
+	init_out.max_readahead = init_in.max_readahead;
+
+	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_opendir(auto const &in, auto &out,
+                                    uint64 const nodeid)
+{
+	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
+
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	if (in_size < sizeof(fuse_open_in) || out_size < sizeof(fuse_open_out))
+		return 0u;
+
+	auto const &open_in  = *reinterpret_cast<fuse_open_in  *>(in_addr);
+	auto       &open_out = *reinterpret_cast<fuse_open_out *>(out_addr);
+
+	Logging::printf("%s: nodeid=%llu flags=%x %x\n", __func__, nodeid,
+	                open_in.flags, open_in.open_flags);
+
+	/* use nodeid as file handle XXX ? */
+	open_out.fh         = nodeid;
+	open_out.open_flags = 0;
+
+	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_readdir(auto const &in, auto &out,
+                                    uint64 const nodeid, int32 err)
+{
+	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
+
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	auto       &init_out = *reinterpret_cast<fuse_init_out *>(out_addr);
+
+	unsigned ret_size = 0;
+
+	auto entry = reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+
+	entry->ino     = 2;
+	entry->off     = 0; /* XXX */
+	entry->namelen = 8;
+	entry->type    = S_IFREG; /* ? */
+	memcpy(entry->name, "alex123", entry->namelen);
+
+	ret_size += int32(sizeof(*entry) + entry->namelen);
+
+#if 0
+	entry = reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+
+	entry->ino     = 3;
+	entry->off     = ret_size; /* XXX */
+	entry->namelen = 8;
+	entry->type    = S_IFREG; /* ? */
+	memcpy(entry->name, "hola123", entry->namelen);
+
+	ret_size += int32(sizeof(*entry) + entry->namelen);
+#endif
+
+//	err = ret_size;
+
+	Logging::printf("%s: %u ret_size=%u err=%u\n",
+	                __func__, sizeof(fuse_dirent), ret_size, err);
+
+	return ret_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_reldir(auto const &in, auto &out,
+                                   uint64 const nodeid)
+{
+	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
+
+	if (!in.len)
+		return 0u;
+
+	Logging::printf("%s: missing\n", __func__);
+
+	return 0u;
+}
+
+
+unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
+                                   uint64 const nodeid)
+{
+	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
+
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	auto const   open_in = reinterpret_cast<char const * const>(in_addr);
+	auto       &open_out = *reinterpret_cast<fuse_entry_out *>(out_addr);
+
+	if (out_size < sizeof(open_out))
+		return 0;
+
+	bool alex = strcmp(open_in, "alex123") == 0;
+
+	Logging::printf("%s: nodeid=%llu name='%s' %s\n", __func__, nodeid,
+	                open_in, alex ? "alex" : "non alex");
+
+	memset(&open_out, 0, sizeof(open_out));
+
+	open_out.nodeid      = alex ? 2 : 3;
+	open_out.generation  = 0;
+	open_out.entry_valid = 10; /* 10s */
+	open_out.attr_valid  = 10; /* 10s */
+	open_out.entry_valid_nsec = 0; /* + 0ns */
+	open_out.attr_valid_nsec  = 0; /* + 0ns */
+
+	open_out.attr.ino    = alex ? 2 : 3;
+	open_out.attr.size   = 4 * 512;
+	open_out.attr.blocks = 4;
+#if 0
+	uint64 atime;
+	uint64 mtime;
+	uint64 ctime;
+	uint32 atimensec;
+	uint32 mtimensec;
+	uint32 ctimensec;
+#endif
+	open_out.attr.mode   = S_IFREG;
+#if 0
+	uint32 nlink;
+	uint32 uid;
+	uint32 gid;
+	uint32 rdev;
+#endif
+	open_out.attr.blksize = 512;
+#if 0
+	uint32 flags;
+#endif
+
+
+	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_getattr(auto const &in, auto &out,
+                                    uint64 const nodeid)
+{
+	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
+
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	if (in_size < sizeof(fuse_getattr_in) || out_size < sizeof(fuse_attr_out))
+		return 0u;
+
+	auto const &attr_in  = *reinterpret_cast<fuse_getattr_in *>(in_addr);
+	auto       &attr_out = *reinterpret_cast<fuse_attr_out   *>(out_addr);
+
+	Logging::printf("%s: fh=%llu\n", __func__, attr_in.fh);
+
+	/* XXX - presumably root == 0 directory ? or nodeid ? */
+	if (attr_in.fh != 0) {
+		Logging::printf("%s: missing %p %p\n", __func__, attr_in, attr_out);
+		return 0u;
+	}
+
+	/* request by fuse_do_getattr of linux/fs/fuse/dir.c */
+
+	memset(&attr_out, 0, sizeof(attr_out));
+
+	attr_out.attr_valid      = 10; /*   10s  */
+	attr_out.attr_valid_nsec =  0; /* +  0ns */
+
+	attr_out.attr.ino    = nodeid;
+	attr_out.attr.size   = 64;
+	attr_out.attr.blocks = 1;
+#if 0
+	uint64 atime;
+	uint64 mtime;
+	uint64 ctime;
+	uint32 atimensec;
+	uint32 mtimensec;
+	uint32 ctimensec;
+#endif
+	attr_out.attr.mode    = nodeid == 1 ? S_IFDIR : S_IFREG;
+#if 0
+	uint32 nlink;
+	uint32 uid;
+	uint32 gid;
+	uint32 rdev;
+#endif
+	attr_out.attr.blksize = 512;
+#if 0
+	uint32 flags;
+#endif
+
+	return out_size;
+}
 
 PARAM_HANDLER(virtio_fs,
 	      "virtio_fs:mem,bdf - attach an virtio fs to the PCI bus",
