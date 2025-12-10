@@ -59,3 +59,9 @@ char * strcpy(char *dst, const char *src)
   } while (ch);
   return res;
 }
+
+
+int strcmp(const char *dst, const char *src) {
+  while ((*dst != 0) && (*dst == *src)) {dst++; src++;}
+  return *dst - *src;
+}
