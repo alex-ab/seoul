@@ -3,7 +3,14 @@
 Seoul is a x86 Virtual Machine Monitor including device models and
 instruction emulator. It is a standalone version of the Vancouver VMM
 that is included in [[https://github.com/TUD-OS/NUL][NUL]] and was developed
-mainly by Bernhard Kauer. NUL and the Vancouver project is discontinued.
+mainly by Bernhard Kauer. The combination of NOVA and Vancouver (later
+Seoul) is described in the following paper by Udo Steinberg and Bernhard Kauer:
+
+[http://os.inf.tu-dresden.de/papers_ps/steinberg_eurosys2010.pdf - NOVA: A Microhypervisor-Based Secure Virtualization Architecture].
+
+NUL and the Vancouver project is discontinued. Even so Seoul was originally
+developed solely to run with the NOVA hypervisor, nowadays it is
+also available for seL4 and Fiasco.OC on Genode.
 
 This fork of [[https://github.com/TUD-OS/seoul][Seoul]] is an adjusted version
 specifically tailored to run with the [[https://genode.org][Genode]] operating
@@ -15,9 +22,10 @@ nor runnable.
 
 Seoul gets mainly maintained and extended by
 [[https://github.com/alex-ab][me]] on a casual base as time permits.
-This repository is referenced as external port of
-[[https://github.com/genodelabs/genode-world][genode-world]], which contains
-the Genode side of the adaptations for this Seoul repository.
+This repository is referenced as external port via Genode GOA SDK in
+[[https://github.com/genodelabs/genode-world][genode-world]] and for
+developer purposes via my [[https://github.com/alex-ab/genode-chest][chest]]
+repository.
 
 Beside keeping it runnable, the noteworthy extensions are
 the [[https://genode.org/documentation/release-notes/23.11#Seoul_virtual_machine_monitor][64 bit guest support]]
@@ -27,7 +35,7 @@ models for GPU(2D), audio and input in 2021-2022.
 From time to time I [[https://www.genodians.org/alex-ab/index][publish]]
 on [[https://www.genodians.org][genodians.org]] updates.
 
-* Using Seoul with Genode OS framework
+* Developing Seoul with Genode OS framework
 
 To use it, you first need to obtain a clone of Genode:
 
@@ -35,15 +43,15 @@ To use it, you first need to obtain a clone of Genode:
 
 Please follow the instruction of the Genode OS framework to get ready.
  
-Now, clone the _genode-world.git_ repository to _genode/repos/world_:
+Now, clone the _genode-chest.git_ repository to _genode/repos/chest_:
 
-! git clone https://github.com/genodelabs/genode-world.git genode/repos/world
+! git clone https://github.com/alex-ab/genode-chest.git genode/repos/chest
 
 For enabling the repository, adjust the build-directory configuration
 _etc/build.conf_ by adding the following line to the 'REPOSITORIES'
 definitions.
 
-! REPOSITORIES += $(GENODE_DIR)/repos/world
+! REPOSITORIES += $(GENODE_DIR)/repos/chest
 
 Within the genode directory, create an build directory for x86, e.g.
 
@@ -53,10 +61,9 @@ Get the external Seoul port, which is this repository:
 
 ! tool/ports/prepare_port seoul
 
-In repos/world/run you will find various seoul*.run scenarios, e.g. an
+In repos/chest/run you will find various seoul*.run scenarios, e.g. an
 example invocation is
 
 ! make -C build/x86_64 KERNEL=nova run/seoul-auto
 
-For questions please consult the Genode mailing list or use
-the github issue tracker of this repository.
+For questions please consult github issue tracker of this repository.
