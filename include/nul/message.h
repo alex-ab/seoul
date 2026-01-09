@@ -9,15 +9,15 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * Copyright (C) 2021-2024 Alexander Boettcher
+ * Copyright (C) 2021-2025 Alexander Boettcher
  *
- * This file is part of Seoul/Vancouver.
+ * This file is part of Seoul.
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -914,4 +914,52 @@ struct MessageAudio
 	MessageAudio(Type const t, unsigned i) : type(t), id(i) { }
 	MessageAudio(Type const t, uintptr_t d, unsigned s, unsigned c)
 	: type(t), data(d), size(s), consumed(c) { }
+};
+
+
+struct MessageFs
+{
+	enum Type { INIT, OPEN_DIR, READ_DIR, CLOSE_DIR };
+
+	unsigned  const id;
+	enum Type const type;
+	uint64          fh;
+
+	struct Buffer {
+		uintptr_t   start;
+		unsigned    size;
+		unsigned    offset;
+	} buffer { };
+
+	unsigned const entry_offset;
+	unsigned const entry_size;
+
+	MessageFs(Type const t, unsigned i, uint64 f = 0, unsigned eo = 0, unsigned es = 0)
+	: id(i), type(t), fh(f), entry_offset(eo), entry_size(es) { }
+
+	bool add_read_dir(char const * const dir, unsigned dir_size)
+	{
+		if (!buffer.start || !buffer.size || buffer.offset >= buffer.size)
+			return false;
+
+		if (buffer.offset + entry_offset + dir_size + 1>= buffer.size)
+			return false;
+
+		auto * ds = reinterpret_cast<unsigned *>(buffer.start + buffer.offset +
+		                                         entry_offset - entry_size);
+		void * ptr = reinterpret_cast<void *>(buffer.start + buffer.offset +
+		                                      entry_offset);
+		char * ter = reinterpret_cast<char *>(buffer.start + buffer.offset +
+		                                      entry_offset + dir_size);
+
+		*ds = dir_size + 1;
+
+		__builtin_memcpy(ptr, dir, dir_size);
+
+		*ter = 0;
+
+		buffer.offset += entry_offset + dir_size + 1;
+
+		return true;
+	}
 };

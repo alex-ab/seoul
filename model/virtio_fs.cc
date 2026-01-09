@@ -1,7 +1,7 @@
 /**
  * Virtio filesystem device
  *
- * Copyright (C) 2024, Alexander Boettcher
+ * Copyright (C) 2024-2025, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -152,7 +152,24 @@ struct fuse_entry_out {
 	uint32 entry_valid_nsec;
 	uint32 attr_valid_nsec;
 	struct fuse_attr attr;
-};
+} __attribute__((packed));
+
+struct fuse_read_in {
+	uint64 fh;
+	uint64 offset;
+	uint32 size;
+	uint32 read_flags;
+	uint64 lock_owner;
+	uint32 flags;
+	uint32 padding;
+} __attribute__((packed));
+
+struct fuse_release_in {
+	uint64 fh;
+	uint32 flags;
+	uint32 release_flags;
+	uint64 lock_owner;
+} __attribute__((packed));
 
 /* Virtio spec 1.2, 5.11 File system, 5.11.4 Device configuration layout */
 struct Virtio_fs_config
@@ -187,6 +204,9 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 {
 	private:
 
+		DBus<MessageFs> &_bus_fs;
+
+		unsigned const _fs_id;
 //		unsigned    const  _device { 0x10002 };
 		Seoul::Lock      _lock      { };
 		Virtio_fs_config _fs_config { };
@@ -197,16 +217,19 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 
 		Virtio_fs(DBus<MessageIrqLines>  &bus_irqlines,
 		          DBus<MessageMemRegion> &bus_memregion,
+		          DBus<MessageFs>        &bus_fs,
 		          uint64 const bar_addr,
 		          uint8  const irq_pin,
 		          uint8  const irq_line,
-		          uint16 const bdf)
+		          uint16 const bdf,
+		          unsigned const fs_id)
 		:
 			Virtio::Device(bus_irqlines, bus_memregion, irq_pin, irq_line, bdf,
 			               26 /* virtio type */,
 			               0x01080001, /* pci class code (mass storage), sub class (other), prog if, rev. id */
 			               bar_addr,
-			               3 /* queues */)
+			               3 /* queues */),
+			_bus_fs(bus_fs), _fs_id(fs_id)
 		{
 			_verbose = false;
 		}
@@ -255,6 +278,16 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 					return Virtio::Device::receive(msg);
 				}
 			});
+		}
+
+		bool receive(MessageFs &msg)
+		{
+			if (msg.id != _fs_id)
+				return false;
+
+			Logging::printf("MessageFs receive - implement me");
+
+			return true;
 		}
 
 		void notify (unsigned queue) override;
@@ -372,6 +405,7 @@ void Virtio_fs::notify (unsigned queue)
 		out.error  = err;
 		out.unique = unique;
 
+		if (err) return 0u;
 		return request_size;
 	});
 
@@ -438,9 +472,12 @@ unsigned Virtio_fs::fuse_op_opendir(auto const &in, auto &out,
 	Logging::printf("%s: nodeid=%llu flags=%x %x\n", __func__, nodeid,
 	                open_in.flags, open_in.open_flags);
 
-	/* use nodeid as file handle XXX ? */
-	open_out.fh         = nodeid;
-	open_out.open_flags = 0;
+	MessageFs msg(MessageFs::OPEN_DIR, _fs_id);
+	if (!_bus_fs.send(msg))
+		return 0u;
+
+	open_out.fh         = msg.fh;
+	open_out.open_flags = 0; /* XXX */
 
 	return out_size;
 }
@@ -460,19 +497,89 @@ unsigned Virtio_fs::fuse_op_readdir(auto const &in, auto &out,
 	auto const out_addr = vmm_address(out.addr, out.len);
 	auto const out_size = out.len;
 
-	auto       &init_out = *reinterpret_cast<fuse_init_out *>(out_addr);
+	if (in_size < sizeof(fuse_read_in) || out_size < sizeof(fuse_dirent))
+		return 0u;
+
+	auto const &read_in = *reinterpret_cast<fuse_read_in *>(in_addr);
+
+	Logging::printf("%s: fh=%llx offset=%llx+%lx r_flags=%x flags=%x\n",
+	                __func__, read_in.fh, read_in.offset, read_in.size,
+	                read_in.read_flags, read_in.flags);
 
 	unsigned ret_size = 0;
 
-	auto entry = reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+#if 1
+	static unsigned round = 0;
 
-	entry->ino     = 2;
-	entry->off     = 0; /* XXX */
-	entry->namelen = 8;
-	entry->type    = S_IFREG; /* ? */
-	memcpy(entry->name, "alex123", entry->namelen);
+	round ++;
 
-	ret_size += int32(sizeof(*entry) + entry->namelen);
+	if (round > 1)
+		return 0u;
+#endif
+
+	auto &entry = *reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+
+	auto const eo = sizeof(entry.ino)     + sizeof(entry.off) +
+	                sizeof(entry.namelen) + sizeof(entry.type);
+	auto const es = sizeof(entry.namelen) + sizeof(entry.type);
+
+	MessageFs msg(MessageFs::READ_DIR, _fs_id, read_in.fh, eo, es);
+
+	msg.buffer.start  = out_addr;
+	msg.buffer.size   = out_size;
+	msg.buffer.offset = 0;
+
+	if (!_bus_fs.send(msg))
+		return 0u;
+
+	Logging::printf("--- offset a %x\n", msg.buffer.offset);
+
+#if 1
+	{
+		auto &entry = *reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+		Logging::printf("%u %u '%s'", ret_size, entry.namelen, entry.name);
+		entry.ino     = 2;
+		entry.off     = 32; /* next direntry for us to track ? */
+		entry.type    = S_IFREG; /* ? */
+		ret_size += int32(sizeof(entry) + entry.namelen);
+	}
+
+	{
+		auto &entry = *reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+		Logging::printf("%u %u '%s'", ret_size, entry.namelen, entry.name);
+		entry.ino     = 2;
+		entry.off     = 33; /* next direntry for us to track ? */
+		entry.type    = S_IFREG; /* ? */
+		ret_size += int32(sizeof(entry) + entry.namelen);
+	}
+
+#else
+	/* XXX fuse_dirent size check name len in loop */
+
+	{
+		auto &entry = *reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+
+		entry.ino     = 2;
+		entry.off     = 32; /* next direntry for us to track ? */
+		entry.namelen = 8;
+		entry.type    = S_IFREG; /* ? */
+		memcpy(entry.name, "alex123", entry.namelen);
+
+		ret_size += int32(sizeof(entry) + entry.namelen);
+	}
+
+	{
+		auto &entry = *reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
+
+		entry.ino     = 2;
+		entry.off     = 33; /* next direntry for us to track ? */
+		entry.namelen = 8;
+		entry.type    = S_IFREG; /* ? */
+		memcpy(entry.name, "file_aa", entry.namelen);
+
+		ret_size += int32(sizeof(entry) + entry.namelen);
+	}
+#endif
 
 #if 0
 	entry = reinterpret_cast<fuse_dirent *>(out_addr + ret_size);
@@ -498,12 +605,20 @@ unsigned Virtio_fs::fuse_op_readdir(auto const &in, auto &out,
 unsigned Virtio_fs::fuse_op_reldir(auto const &in, auto &out,
                                    uint64 const nodeid)
 {
-	Logging::printf("%s: in %u out %u - nodeid=%llu\n", __func__, in.len, out.len, nodeid);
-
 	if (!in.len)
 		return 0u;
 
-	Logging::printf("%s: missing\n", __func__);
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	if (in_size < sizeof(fuse_release_in))
+		return 0u;
+
+	auto const &release_in = *reinterpret_cast<fuse_release_in *>(in_addr);
+
+	Logging::printf("%s: nodid=%llx fh=%llx flags=%x release_flags=%x lock_owner=%llx\n",
+	                __func__, nodeid, release_in.fh, release_in.flags,
+	                release_in.release_flags, release_in.lock_owner);
 
 	return 0u;
 }
@@ -529,7 +644,7 @@ unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
 	if (out_size < sizeof(open_out))
 		return 0;
 
-	bool alex = strcmp(open_in, "alex123") == 0;
+	bool alex = strcmp(open_in, "runtime") == 0;
 
 	Logging::printf("%s: nodeid=%llu name='%s' %s\n", __func__, nodeid,
 	                open_in, alex ? "alex" : "non alex");
@@ -648,12 +763,15 @@ PARAM_HANDLER(virtio_fs,
 	if (argv[0] == ~0UL)
 		Logging::panic("virtio_fs: missing bar address");
 
-	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_memregion,
-	                         bar_base, irq_pin, irq_line, uint16(bdf));
+	unsigned const fs_id = 1; /* XXX - allocator */
+
+	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_memregion, mb.bus_fs,
+	                         bar_base, irq_pin, irq_line, uint16(bdf), fs_id);
 
 	mb.bus_pcicfg.add(dev, Virtio_fs::receive_static<MessagePciConfig>);
 	mb.bus_mem   .add(dev, Virtio_fs::receive_static<MessageMem>);
 	mb.bus_bios  .add(dev, Virtio_fs::receive_static<MessageBios>);
+	mb.bus_fs    .add(dev, Virtio_fs::receive_static<MessageFs>);
 
 	Logging::printf("Virtio Filesystem\n");
 }
