@@ -221,8 +221,10 @@ void SataDrive::_build_identify_buffer(uint16 * const identify) const
 
 	identify[64] = 3;      // pio 3+4
 	identify[75] = 0x1f;   // NCQ depth 32
-	identify[76] = 0x002;   // disabled NCQ + 1.5gbit
+	identify[76] = 0x002;   // enabled NCQ + 1.5gbit
 	identify[80] = 1 << 6; // major version number: ata-6
+//	identify[82] = 1 << 5 /* write-cache */ | 1 << 6 /* read-cache */;
+//	identify[85] = 1 << 5 /* write-cache */ | 1 << 6 /* read-cache */;
 	identify[83] = 0x4000 | 1 << 10; // lba48
 	identify[86] = 1 << 10; // lba48 enabled
 	identify[88] = 0x203f;  // ultra DMA5 enabled

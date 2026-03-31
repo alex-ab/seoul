@@ -106,7 +106,7 @@ public:
 	if (~fis[0] & 0x80000 && fis[4])  { // !DRQ && dsf[6]
 	  unsigned mask = 1 << (fis[4] - 1);
 	  if (mask & ~_inprogress)
-	    Logging::panic("XXX broken %x,%x inprogress %x\n", fis[0], fis[4], _inprogress);
+	    Logging::panic("XXX broken %x,%x mask=%x & ~%x=inprogress\n", fis[0], fis[4], mask, _inprogress);
 	  _inprogress &= ~mask;
 	  PxCI &= ~mask;
 	  PxSACT &= ~mask;
@@ -171,6 +171,8 @@ public:
     _inprogress = 0;
 
     if (_drive) {
+
+      Logging::printf("reset good ?\n");
 
       // we use the legacy reset mechanism to transmit a COMRESET to the SATA disk
       unsigned fis[5] = { 0x27, 0, 0, 0x04000000, 0};
