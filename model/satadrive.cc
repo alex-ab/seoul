@@ -316,22 +316,20 @@ void SataDrive::_readwrite_sectors(bool const read, bool const lba48_ext)
 
 SataDrive::Job_result SataDrive::_do_operation(struct Operation &contract)
 {
-	unsigned constexpr block_size = 512;
-	unsigned constexpr block_mask = block_size - 1;
-	unsigned long      max_len    = contract.len;
+	uint64 constexpr block_size = 512;
+	uint64 constexpr block_mask = block_size - 1;
+	unsigned long      max_len  = contract.len;
 
 	while (contract.len) {
 
-		auto job = contract;
-
-		size_t transfer = 0;
-		if (job.lastoffset) job.prd--;
-
+		auto     job      = contract;
+		size_t   transfer = 0;
 		unsigned dmacount = 0;
+
 		for (; job.prd  < _dsf.prd_count  &&
 		       dmacount < DMA_DESCRIPTORS &&
 		       job.len  > transfer
-		     ; job.prd++, dmacount++)
+		     ; dmacount++)
 		{
 			unsigned prdvalue[4] { };
 
@@ -342,10 +340,29 @@ SataDrive::Job_result SataDrive::_do_operation(struct Operation &contract)
 
 			VMM_MEMORY_BARRIER;
 
-			size_t sublen = ((prdvalue[3] & 0x3fffff) + 1) - job.lastoffset;
+			auto const prdlen = ((prdvalue[3] & 0x3fffff) + 1);
+			auto       sublen = prdlen - job.lastoffset;
 
-			if (transfer + sublen > max_len)
-				break;
+			if (transfer + sublen > max_len) {
+
+				_dma[dmacount].byteoffset = uintptr_t(union64(prdvalue[1], prdvalue[0]) + job.lastoffset);
+				_dma[dmacount].bytecount  = max_len - transfer;
+
+				transfer       += _dma[dmacount].bytecount;
+				job.lastoffset += _dma[dmacount].bytecount;
+
+				if (prdlen == job.lastoffset) {
+					job.lastoffset = 0;
+					job.prd ++;
+				}
+
+				if (max_len == transfer) {
+					dmacount ++;
+					break;
+				}
+
+				continue;
+			}
 
 			if (sublen > job.len - transfer)
 				sublen = job.len - transfer;
@@ -354,7 +371,9 @@ SataDrive::Job_result SataDrive::_do_operation(struct Operation &contract)
 			_dma[dmacount].bytecount = sublen;
 
 			transfer += sublen;
+
 			job.lastoffset = 0;
+			job.prd++;
 		}
 
 		// remove all entries that completely contribute to the even entry and split larger ones
@@ -420,7 +439,6 @@ SataDrive::Job_result SataDrive::_do_operation(struct Operation &contract)
 
 		/* commit finished job */
 		contract = job;
-		max_len  = contract.len;
 	}
 
 	return Job_result::JOB_OK;
