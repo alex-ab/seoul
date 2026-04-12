@@ -19,8 +19,7 @@
  * conditions of the GNU General Public License version 2.
  */
 
-#ifndef _DISK_H_
-#define _DISK_H_
+#pragma once
 
 /* Genode includes */
 #include <block_session/connection.h>
@@ -63,33 +62,64 @@ class Seoul::Disk : public StaticReceiver<Seoul::Disk>
 {
 	private:
 
-		struct Disk_session {
-			Block::Connection<> *blk_con;
-			Block::Session::Info info;
-			Disk_signal         *signal;
-		};
-
-		struct Outstanding {
+		struct Pending {
 			unsigned long  usertag;
-			unsigned       dmacount;
-			DmaDescriptor *dma;
 			unsigned long  physoffset;
+			unsigned long  consumed;
+			DmaDescriptor *dma;
+			unsigned       dmacount;
+
+			Block::Packet_descriptor pkg;
 		};
 
 		/* SATA model has max 33 and IDE 1 as max outstanding requests atm */
-		enum { MAX_DISKS = 4, MAX_OUTSTANDING = 48 };
+		enum { MAX_DISKS = 6, MAX_OUTSTANDING = 64 };
+
+		struct Disk_session {
+			Block::Connection<> * blk_con;
+			Block::Session::Info  info;
+			Disk_signal         * signal;
+			Genode::Mutex         mutex;
+			unsigned long         max_size;
+			struct Pending        pending[MAX_OUTSTANDING] { };
+			bool                  resume_execution;
+			bool                  last_op_write;
+			bool                  nosync;
+			bool                  allowpartial;
+
+			bool alloc_pending(auto const &fn)
+			{
+				for (unsigned i = 0; i < MAX_OUTSTANDING; i++) {
+					auto & p = pending[i];
+
+					if (p.dmacount)
+						continue;
+
+					return fn(p, Block::Request::Tag { i });
+				}
+
+				return false;
+			}
+
+			void free_pending(Pending &p) { p = { }; }
+
+			bool with_pending(Block::Packet_descriptor::Tag const &tag, auto const &fn)
+			{
+				if (tag.value >= MAX_OUTSTANDING)
+					Logging::panic("in-sane outstanding tag write");
+
+				return fn(pending[tag.value]);
+			}
+		};
+
 
 		Genode::Env         &_env;
 		Motherboard         &_mb;
 
-		struct Outstanding   _outstanding[MAX_OUTSTANDING] { };
-		struct Disk_session  _disks      [MAX_DISKS]       { };
+		struct Disk_session  _disks [MAX_DISKS] { };
 
 		char        * const _backing_store_base;
 		size_t        const _backing_store_size;
-
-		Genode::Mutex       _mutex            { };
-		bool                _resume_execution { };
 
 		/*
 		 * Noncopyable
@@ -97,42 +127,124 @@ class Seoul::Disk : public StaticReceiver<Seoul::Disk>
 		Disk             (Disk const &);
 		Disk &operator = (Disk const &);
 
-		bool execute(bool, Disk_session const &, MessageDisk &);
+		bool execute(bool, Disk_session &, MessageDisk &);
 
 		bool _execute_write(Block::Session::Tx::Source       &,
 		                    Block::Packet_descriptor   const &,
-		                    unsigned long              const,
-		                    Disk_session               const &,
+		                    unsigned long              const  ,
+		                    Disk_session                     &,
 		                    MessageDisk                const &);
 
 		bool _execute_read (Block::Session::Tx::Source       &,
 		                    Block::Packet_descriptor   const &,
-		                    unsigned long              const,
-		                    Disk_session               const &,
+		                    unsigned long              const  ,
+		                    Disk_session                     &,
 		                    MessageDisk                const &);
 
-		bool for_each_dma_desc(auto   const &msg,
+		bool for_each_dma_desc(auto         &msg,
 		                       auto   const &packet,
 		                       char * const  source,
 		                       auto   const &fn)
 		{
 			unsigned long offset = 0;
 
+			if (!packet.size())
+				return false;
+
 			/* check bounds for read and write operations */
 			for (unsigned i = 0; i < msg.dmacount; i++) {
 				char * const dma_addr = _backing_store_base +
 				                        msg.dma[i].byteoffset +
 				                        msg.physoffset;
+				auto const bytecount  = msg.dma[i].bytecount;
 
 				/* check for bounds */
 				if (dma_addr >= _backing_store_base + _backing_store_size ||
-				    dma_addr < _backing_store_base)
-					return false;
+				    dma_addr < _backing_store_base) {
 
-				auto const bytecount = msg.dma[i].bytecount;
-
-				if (!packet.size() || bytecount > packet.size() - offset)
+					Genode::error(__func__, ":", __LINE__, " out-of-bound access",
+					              (void *)dma_addr,
+					              " ", (void *)_backing_store_base,
+				                  "+", Genode::Hex(_backing_store_size));
 					return false;
+				}
+
+				if (bytecount > packet.size() - offset) {
+					Genode::error(__func__, ":", __LINE__, " insufficient space  -",
+					              "packet.size()=", packet.size(), " ",
+					              bytecount, " > ", packet.size(), "-", offset);
+					return false;
+				}
+
+				fn(dma_addr, source + offset, bytecount);
+
+				offset += bytecount;
+			}
+
+			return true;
+		}
+
+		bool for_each_dma_desc(auto         &msg,
+		                       auto   const &packet,
+		                       char * const  source,
+		                       auto   const &fn,
+		                       auto   const &fn_partial)
+		{
+			unsigned long offset   = 0;
+			unsigned long consumed = 0;
+
+			if (!packet.size())
+				return false;
+
+			/* check bounds for read and write operations */
+			for (unsigned i = 0; i < msg.dmacount; i++) {
+				char * const dma_addr = _backing_store_base +
+				                        msg.dma[i].byteoffset +
+				                        msg.physoffset;
+				auto const bytecount  = msg.dma[i].bytecount;
+
+
+				/* check for bounds */
+				if (dma_addr >= _backing_store_base + _backing_store_size ||
+				    dma_addr < _backing_store_base) {
+
+					Genode::error(__func__, ":", __LINE__, " out-of-bound access",
+					              (void *)dma_addr,
+					              " ", (void *)_backing_store_base,
+				                  "+", Genode::Hex(_backing_store_size));
+					return false;
+				}
+
+				if (consumed < msg.consumed) {
+					if (consumed + bytecount <= msg.consumed) {
+						consumed += bytecount;
+						continue;
+					}
+
+					auto con  = msg.consumed - consumed;
+					auto size = Genode::min(packet.size(), bytecount - con);
+
+					if (packet.size() < bytecount - con) {
+						msg.consumed += packet.size();
+
+						fn_partial(dma_addr + con, source, size);
+						return false;
+					}
+
+					fn(dma_addr + con, source, size);
+
+					consumed += con;
+					offset    = size;
+
+					continue;
+				}
+
+				if (bytecount > packet.size() - offset) {
+					msg.consumed += packet.size();
+
+					fn_partial(dma_addr, source + offset, packet.size() - offset);
+					return false;
+				}
 
 				fn(dma_addr, source + offset, bytecount);
 
@@ -147,11 +259,9 @@ class Seoul::Disk : public StaticReceiver<Seoul::Disk>
 		static constexpr unsigned block_packetstream_size = 4096 * 1024
 	                                                      + 64 * 1024;
 
-		Disk(Genode::Env &, Motherboard &, char *, Genode::size_t);
+		Disk(Genode::Env &, Motherboard &, char *, Genode::size_t, Genode::Node const &);
 
 		void handle_disk(unsigned);
 
 		bool receive(MessageDisk &msg);
 };
-
-#endif /* _DISK_H_ */
