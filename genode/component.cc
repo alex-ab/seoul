@@ -1871,7 +1871,8 @@ void Component::construct(Genode::Env &env)
 
 	static Seoul::Disk vdisk(env, machine.motherboard(),
 	                         guest_memory.backing_store_local_base(),
-	                         guest_memory.backing_store_size());
+	                         guest_memory.backing_store_size(),
+	                         vmm.config.node());
 
 	vmm.config.node().with_sub_node("machine",
 		[&] (auto const &sub_node) { machine.setup_devices(vmm.config.node(), sub_node); },
