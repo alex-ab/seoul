@@ -1015,7 +1015,7 @@ struct Vmm {
 	Genode::Env          &env;
 	Genode::Heap          heap   { env.ram(), env.rm() };
 	Genode::Vm_connection vm_con { env, "Seoul vCPUs",
-	                               Genode::Cpu_session::PRIORITY_LIMIT / 16 };
+	                               Genode::Cpu_session::PRIORITY_LIMIT / 4 };
 
 	Attached_rom_dataspace config { env, "config" };
 	Attached_rom_dataspace info   { env, "platform_info" };
