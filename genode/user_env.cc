@@ -25,8 +25,6 @@
 #include <service/logging.h>
 #include <service/memory.h>
 
-enum { verbose_memory_leak = false };
-
 
 static void vprintf(const char *format, va_list &args)
 {
@@ -137,8 +135,7 @@ void operator delete[](void *ptr)
 	if (!ptr)
 		return;
 
-	if (verbose_memory_leak)
-		Genode::warning("delete[] not implemented ", ptr);
+	heap_free(ptr);
 }
 
 
@@ -147,8 +144,7 @@ void operator delete[](void *ptr, long unsigned int)
 	if (!ptr)
 		return;
 
-	if (verbose_memory_leak)
-		Genode::warning("delete[] not implemented ", ptr);
+	heap_free(ptr);
 }
 
 

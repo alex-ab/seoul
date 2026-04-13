@@ -191,17 +191,17 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		~Virtio_gpu();
 
 		struct resource_2d {
-			void *        memory_vmm;
-			gpu_mem_entry guest_fb_memory[1280];
-			unsigned      valid_memory_entries;
-			uint32        format;
-			uint16        valid;
-			uint32        resource_id;
-			uint32        width;
-			uint32        height;
-			gpu_rect      scanout;
-			uint32        scanout_id;
-			bool          scanout_valid;
+			void *          memory_vmm;
+			gpu_mem_entry * guest_memory;
+			unsigned        valid_memory_entries;
+			uint32          format;
+			uint16          valid;
+			uint32          resource_id;
+			uint32          width;
+			uint32          height;
+			gpu_rect        scanout;
+			uint32          scanout_id;
+			bool            scanout_valid;
 		} resources_2d [64] { };
 
 		template <typename FUNC>
@@ -227,6 +227,11 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				_bus_console.send(msg);
 
 				res.memory_vmm = nullptr;
+			}
+
+			if (res.guest_memory) {
+				delete res.guest_memory;
+				res.guest_memory = nullptr;
 			}
 
 			res.valid = false;
@@ -292,20 +297,20 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			unsigned const guest_stride = resource.width * 4;
 			unsigned const vmm_stride   = guest_stride;
 
-			if (!resource.memory_vmm)
+			if (!resource.memory_vmm || !resource.guest_memory)
 				return;
 
 			uint64 resource_offset = 0;
 			uint64 x, y = 0;
 			for (unsigned i = 0; i < resource.valid_memory_entries; i++) {
 				auto vmm_ptr    = uintptr_t(resource.memory_vmm) + (resource_offset / guest_stride) * vmm_stride;
-				auto from_guest = vmm_address(resource.guest_fb_memory[i].addr,
-				                              resource.guest_fb_memory[i].length);
+				auto from_guest = vmm_address(resource.guest_memory[i].addr,
+				                              resource.guest_memory[i].length);
 
 				if (!from_guest)
 					return;
 
-				unsigned       length    = resource.guest_fb_memory[i].length;
+				unsigned       length    = resource.guest_memory[i].length;
 				unsigned const unaligned = unsigned(resource_offset % guest_stride);
 				unsigned const row_rest  = VMM_MIN(length, guest_stride - unaligned);
 
@@ -344,7 +349,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				}
 
 				/* not use length variable */
-				resource_offset += resource.guest_fb_memory[i].length;
+				resource_offset += resource.guest_memory[i].length;
 			}
 		}
 
@@ -977,23 +982,23 @@ size_t Virtio_gpu::_gpu_cursor(uintptr_t const in,  size_t const in_size,
 		if (update) {
 			uint64 resource_offset = 0;
 			for (unsigned i = 0; i < resource.valid_memory_entries; i++) {
-				auto const shape_guest = vmm_address(resource.guest_fb_memory[i].addr,
-				                                     resource.guest_fb_memory[i].length);
+				auto const shape_guest = vmm_address(resource.guest_memory[i].addr,
+				                                     resource.guest_memory[i].length);
 
 				if (!shape_guest)
 					return;
 
-				if (resource.guest_fb_memory[i].length > shape_size ||
-				    resource_offset > shape_size - resource.guest_fb_memory[i].length) {
+				if (resource.guest_memory[i].length > shape_size ||
+				    resource_offset > shape_size - resource.guest_memory[i].length) {
 					Logging::printf("%s: cursor too large\n", name);
 					return;
 				}
 
 				memcpy(reinterpret_cast<void *>(shape_ptr + resource_offset),
 				       reinterpret_cast<void *>(shape_guest),
-				       resource.guest_fb_memory[i].length);
+				       resource.guest_memory[i].length);
 
-				resource_offset += resource.guest_fb_memory[i].length;
+				resource_offset += resource.guest_memory[i].length;
 			}
 		}
 
@@ -1039,16 +1044,10 @@ size_t Virtio_gpu::_gpu_attach_backing(uintptr_t const in,   size_t const in_siz
 		bool fail  = true;
 		bool found = apply_to_resource_2d(attach.resource_id, [&](auto &resource) {
 
-			unsigned const max_entries = sizeof(resource.guest_fb_memory) /
-			                             sizeof(resource.guest_fb_memory[0]);
-			if (nr_entries > max_entries) {
-				Logging::printf("%s: too many entries %u\n", name, nr_entries);
-				return;
-			}
-			memcpy(resource.guest_fb_memory, mem_desc,
-			       sizeof(resource.guest_fb_memory[0]) * nr_entries);
-			memset(resource.guest_fb_memory + nr_entries, 0,
-			       sizeof(resource.guest_fb_memory[0]) * (max_entries - nr_entries));
+			resource.guest_memory = new gpu_mem_entry[nr_entries];
+
+			memcpy(resource.guest_memory, mem_desc,
+			       sizeof(resource.guest_memory[0]) * nr_entries);
 
 			VMM_MEMORY_BARRIER;
 
@@ -1057,25 +1056,29 @@ size_t Virtio_gpu::_gpu_attach_backing(uintptr_t const in,   size_t const in_siz
 				for (unsigned i = 0; i < nr_entries; i++) {
 #if 0
 					Logging::printf("gpu, attach: phys=%llx+%x offset_range?=[%llx-%llx)",
-					                resource.guest_fb_memory[i].addr, resource.guest_fb_memory[i].length,
+					                resource.guest_memory[i].addr, resource.guest_memory[i].length,
 					                resource_offset,
-					                resource_offset + resource.guest_fb_memory[i].length);
+					                resource_offset + resource.guest_memory[i].length);
 
 					Logging::printf("gpu, attach: vmm=%lx+%x offset_range?=[%llx-%llx)",
-					                vmm_address(resource.guest_fb_memory[i].addr, resource.guest_fb_memory[i].length),
-					                resource.guest_fb_memory[i].length,
+					                vmm_address(resource.guest_memory[i].addr, resource.guest_memory[i].length),
+					                resource.guest_memory[i].length,
 					                resource_offset,
-					                resource_offset + resource.guest_fb_memory[i].length);
+					                resource_offset + resource.guest_memory[i].length);
 #endif
 					/* check for valid guest memory */
-					if (!vmm_address(resource.guest_fb_memory[i].addr,
-					                 resource.guest_fb_memory[i].length)) {
+					if (!vmm_address(resource.guest_memory[i].addr,
+					                 resource.guest_memory[i].length)) {
 						fail = true;
 						resource.valid_memory_entries = 0;
 						Logging::printf("%s: invalid guest memory descriptors - ignore\n", name);
+
+						delete resource.guest_memory;
+						resource.guest_memory = nullptr;
+
 						return;
 					}
-					resource_offset += resource.guest_fb_memory[i].length;
+					resource_offset += resource.guest_memory[i].length;
 				}
 
 				if (_verbose)
@@ -1112,13 +1115,10 @@ size_t Virtio_gpu::_gpu_detach_backing(uintptr_t const request,
 			if (!resource.valid_memory_entries)
 				return;
 
-			unsigned const max_entries = sizeof(resource.guest_fb_memory) /
-			                             sizeof(resource.guest_fb_memory[0]);
-
-			memset(resource.guest_fb_memory, 0,
-			       sizeof(resource.guest_fb_memory[0]) *
-			       (VMM_MIN(resource.valid_memory_entries, max_entries)));
 			resource.valid_memory_entries = 0;
+
+			delete resource.guest_memory;
+			resource.guest_memory = nullptr;
 		});
 
 		if (!found)
