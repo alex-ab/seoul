@@ -204,6 +204,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 		bool const                          _rdtsc_exit;
 		bool const                          _cpuid_native;
 		bool const                          _track_exits;
+		bool                                _warned_cpuid_once { };
 
 		/* initialize after other members, vCPU gets runnable immediately */
 		Genode::Vm_connection              &_vm_con;
@@ -985,17 +986,22 @@ class Vcpu : public StaticReceiver<Vcpu>
 				 */
 				if ((cpu.xcr0 <= 3) && (ecx == 0 || ecx == 1)) {
 					if (cpu.ebx != 576) {
-						log("change xstate size: eax=0xd ecx=", Hex(ecx),
-						    " -> eax=", Hex(cpu.eax), " ebx=", Hex(cpu.ebx),
-						    " ecx=", Hex(cpu.ecx), " edx=", Hex(cpu.edx),
-						    " xcr0=", Hex(cpu.xcr0));
+						if (!_warned_cpuid_once)
+							log("change xstate size: eax=0xd ecx=", Hex(ecx),
+							    " -> eax=", Hex(cpu.eax), " ebx=", Hex(cpu.ebx),
+							    " ecx=", Hex(cpu.ecx), " edx=", Hex(cpu.edx),
+							    " xcr0=", Hex(cpu.xcr0));
 
 						cpu.ebx = 576;
 
-						log("change xstate size: eax=0xd ecx=", Hex(ecx),
-						    " -> eax=", Hex(cpu.eax), " ebx=", Hex(cpu.ebx),
-						    " ecx=", Hex(cpu.ecx), " edx=", Hex(cpu.edx),
-						    " xcr0=", Hex(cpu.xcr0), " -> adjusted");
+						if (!_warned_cpuid_once)
+							log("change xstate size: eax=0xd ecx=", Hex(ecx),
+							    " -> eax=", Hex(cpu.eax), " ebx=", Hex(cpu.ebx),
+							    " ecx=", Hex(cpu.ecx), " edx=", Hex(cpu.edx),
+							    " xcr0=", Hex(cpu.xcr0), " -> adjusted");
+
+						if (!_warned_cpuid_once)
+							_warned_cpuid_once = true;
 					}
 				}
 				break;
