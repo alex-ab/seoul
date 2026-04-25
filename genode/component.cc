@@ -1480,6 +1480,14 @@ class Machine : public StaticReceiver<Machine>
 			if (msg.nr != _mtimer.nr)
 				return false;
 
+			_guest_memory.trigger_qubes_update();
+
+			/* 20 ms */
+			MessageTimer msg_x(_mtimer.nr, _motherboard.clock()->abstime(20, 1000));
+			_motherboard.bus_timer.send(msg_x);
+
+			return true;
+
 			_debug_timeout++;
 
 			for_each_online_vcpu([&](auto &vcpu) {
@@ -1538,8 +1546,10 @@ class Machine : public StaticReceiver<Machine>
 			_motherboard.bus_legacy.add  (this, receive_static<MessageLegacy>);
 			_motherboard.bus_audio.add   (this, receive_static<MessageAudio>);
 
+#if 0
 			if (!vmm.track_exits)
 				return;
+#endif
 
 			/* debug */
 			_motherboard.bus_timeout.add(this, receive_static<MessageTimeout>);
