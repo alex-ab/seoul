@@ -31,7 +31,105 @@ namespace Seoul {
 	using namespace Genode;
 
 	class Guest_memory;
+	class Capture_hack;
 }
+
+class Seoul::Capture_hack
+{
+	private:
+
+		Env                  &_env;
+		Gui::Connection       _gui;
+		Area<unsigned>        _area    { 1024u, 768u };
+		Framebuffer::Mode     _mode    { .area = _area, .alpha = false };
+		bool                  _enabled { };
+		Dataspace_capability  _ds      { };
+		size_t                _size    { };
+		uintptr_t             _g_phys  { };
+
+	public:
+
+		Capture_hack(Env &env, Vm_connection &vm_con, String<32> name,
+		             uintptr_t phys)
+		:
+			_env(env),
+			_gui(_env, name),
+			_g_phys(phys)
+		{
+			_enabled = true;
+
+			_gui.buffer(_mode);
+
+			_ds   = _gui.framebuffer.dataspace();
+			_size = Dataspace_client(_ds).size();
+
+			if (1)
+			{
+				Attached_dataspace chk(_env.rm(), _ds);
+
+				for (unsigned i = 0; i < _size / 4; i ++) {
+					*(chk.local_addr<unsigned>() + i) = 0xffffffff;
+				}
+			}
+
+			Gui::View_id const view { };
+			Gui::Rect rect(Gui::Point(0, 0), _area);
+
+			_gui.view(view, { .title = "",
+			                  .rect  = { { 0, 0 }, _area },
+			                  .front = true });
+
+			_gui.enqueue<Gui::Session::Command::Geometry>(view, rect);
+			_gui.execute();
+
+			vm_con.attach(_ds, _g_phys,
+				          { .offset     = 0,
+				            .size       = _size,
+				            .executable = false,
+				            .writeable  = true }).with_result(
+				[&] (auto) {
+					warning("add special region to VM ",
+					        Hex_range(_g_phys, _size));
+				}, [&] (auto) {
+					error("map failed");
+					sleep_forever();
+				});
+
+			auto cfg_ds = _env.ram().alloc(4096);
+
+			Attached_dataspace cfg_map(_env.rm(), cfg_ds);
+
+			struct Cfg {
+				unsigned width;
+				unsigned height;
+			};
+
+			auto g_info = align_addr(_g_phys + _size, { .log2 = 12 });
+
+			auto info = cfg_map.local_addr<Cfg>();
+			info->width  = _area.w;
+			info->height = _area.h;
+
+			vm_con.attach(_ds, g_info,
+				          { .offset     = 0,
+				            .size       = 0x1000,
+				            .executable = false,
+				            .writeable  = true }).with_result(
+				[&] (auto) {
+					warning("add special region to VM ",
+					        Hex_range(_g_phys, _size));
+				}, [&] (auto) {
+					error("map failed");
+					sleep_forever();
+				});
+		}
+
+		void update()
+		{
+			if (_enabled)
+				_gui.framebuffer.refresh({ { 0, 0 }, _area });
+		}
+};
 
 class Seoul::Guest_memory
 {
@@ -224,6 +322,19 @@ class Seoul::Guest_memory
 		char *backing_store_local_base()
 		{
 			return reinterpret_cast<char *>(_local_addr);
+		}
+
+		void trigger_qubes_update()
+		{
+			static Capture_hack c_a(_env, _vm_con, "Qubes 1", 0x2affe0000ul);
+			static Capture_hack c_b(_env, _vm_con, "Qubes 2", 0x3affe0000ul);
+			static Capture_hack c_c(_env, _vm_con, "Qubes 3", 0x4affe0000ul);
+			static Capture_hack c_d(_env, _vm_con, "Qubes 4", 0x5affe0000ul);
+
+			c_a.update();
+			c_b.update();
+			c_c.update();
+			c_d.update();
 		}
 
 		size_t backing_store_size() const

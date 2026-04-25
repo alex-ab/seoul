@@ -131,9 +131,37 @@ class VirtualBiosMem : public StaticReceiver<VirtualBiosMem>, public BiosCommon
 
 		  mmap.base = msg2.start_page << 12;
 		  mmap.size = msg2.count      << 12;
-		  cpu->ebx = 0; /* end */
+		  cpu->ebx = 4; /* next */
 		  break;
 		}
+		case 4:
+		  Logging::printf("add special capture region A\n");
+		  mmap.type = 5;
+		  mmap.base = 0x2affe0000ul;
+		  mmap.size = 1024ul * 768 * 4 + 4096;
+		  cpu->ebx = 5; /* next */
+		  break;
+		case 5:
+		  Logging::printf("add special capture region B\n");
+		  mmap.type = 5;
+		  mmap.base = 0x3affe0000ul;
+		  mmap.size = 1024ul * 768 * 4 + 4096;
+		  cpu->ebx = 6; /* end */
+		  break;
+		case 6:
+		  Logging::printf("add special capture region C\n");
+		  mmap.type = 5;
+		  mmap.base = 0x4affe0000ul;
+		  mmap.size = 1024ul * 768 * 4 + 4096;
+		  cpu->ebx = 7; /* end */
+		  break;
+		case 7:
+		  Logging::printf("add special capture region D\n");
+		  mmap.type = 5;
+		  mmap.base = 0x5affe0000ul;
+		  mmap.size = 1024ul * 768 * 4 + 4096;
+		  cpu->ebx = 0; /* end */
+		  break;
 		default:
 		  mmap.type = 0;
 		  break;
