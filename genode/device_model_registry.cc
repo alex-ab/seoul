@@ -89,6 +89,8 @@ MODEL_INFO(virtio_gpu,   "mem", "bdf")
 MODEL_INFO(virtio_sound, "mem", "bdf")
 MODEL_INFO(virtio_fs,    "mem", "bdf")
 
+MODEL_INFO(virtio_template, "mem", "bdf")
+
 MODEL_INFO(xhci, "mem")
 
 MODEL_INFO(ide, "port0", "port1", "irq", "bdf", "disk")
