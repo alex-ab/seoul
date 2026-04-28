@@ -1,7 +1,7 @@
 /**
  * Virtio filesystem device
  *
- * Copyright (C) 2024-2025, Alexander Boettcher
+ * Copyright (C) 2024-2026, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -43,6 +43,8 @@
 #define S_ISFIFO(m)	(((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m)	(((m) & S_IFMT) == S_IFSOCK)
 
+#define FUSE_LX_ENOENT 2
+
 /**********************
  * Structures of FUSE *
  **********************/
@@ -52,10 +54,16 @@ enum fuse_opcode
 	FUSE_LOOKUP  =  1,
 	FUSE_FORGET  =  2,
 	FUSE_GETATTR =  3,
+	FUSE_UNLINK  = 10,
+	FUSE_OPEN    = 14,
+	FUSE_READ    = 15,
+	FUSE_RELEASE = 18,
+	FUSE_FLUSH   = 25,
 	FUSE_INIT    = 26,
 	FUSE_OPENDIR = 27,
 	FUSE_READDIR = 28,
 	FUSE_RELDIR  = 29,
+	FUSE_CREATE  = 35,
 };
 
 struct fuse_attr {
@@ -80,6 +88,13 @@ struct fuse_attr {
 struct fuse_open_in {
 	uint32 flags;
 	uint32 open_flags;
+} __attribute__((packed));
+
+struct fuse_create_in {
+	uint32 flags;
+	uint32 mode;
+	uint32 umask;
+	uint32 open_flags;	/* FUSE_OPEN_... */
 } __attribute__((packed));
 
 struct fuse_open_out {
@@ -152,6 +167,13 @@ struct fuse_entry_out {
 	uint32 entry_valid_nsec;
 	uint32 attr_valid_nsec;
 	struct fuse_attr attr;
+} __attribute__((packed));
+
+struct fuse_flush_in {
+	uint64 fh;
+	uint32 unused;
+	uint32 padding;
+	uint64 lock_owner;
 } __attribute__((packed));
 
 struct fuse_read_in {
@@ -322,12 +344,16 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		}
 
 		unsigned fuse_op_init   (auto const &, auto &, uint64);
-		unsigned fuse_op_lookup (auto const &, auto &, uint64);
-		unsigned fuse_op_getattr(auto const &, auto &, uint64);
-		unsigned fuse_op_opendir(auto const &, auto &, uint64);
+		unsigned fuse_op_create (auto const &, auto &, uint64);
+		unsigned fuse_op_unlink (auto const &, auto &, uint64);
+		unsigned fuse_op_flush  (auto const &, auto &, uint64, unsigned, bool &);
+		unsigned fuse_op_lookup (auto const &, auto &, uint64, unsigned, int32 &);
+		unsigned fuse_op_getattr(auto const &, auto &, uint64, unsigned);
+		unsigned fuse_op_read   (auto const &, auto &, uint64, unsigned, bool &);
+		unsigned fuse_op_open   (auto const &, auto &, uint64, bool);
+		unsigned fuse_op_close  (auto const &, auto &, uint64, bool);
 		unsigned fuse_op_readdir(auto const &, auto &, uint64,
 		                         unsigned, bool, bool &);
-		unsigned fuse_op_reldir (auto const &, auto &, uint64);
 };
 
 
@@ -391,12 +417,20 @@ void Virtio_fs::notify(unsigned queue, bool more)
 
 		switch (in.opcode) {
 		case FUSE_INIT   : res = fuse_op_init   (desc1, desc3, in.nodeid); break;
-		case FUSE_LOOKUP : res = fuse_op_lookup (desc1, desc3, in.nodeid); break;
-		case FUSE_GETATTR: res = fuse_op_getattr(desc1, desc3, in.nodeid); break;
-		case FUSE_OPENDIR: res = fuse_op_opendir(desc1, desc3, in.nodeid); break;
+		case FUSE_CREATE : res = fuse_op_create (desc1, desc3, in.nodeid); break;
+		case FUSE_UNLINK : res = fuse_op_unlink (desc1, desc3, in.nodeid); break;
+		case FUSE_LOOKUP : res = fuse_op_lookup (desc1, desc3, in.nodeid, queue, err); break;
+		case FUSE_GETATTR: res = fuse_op_getattr(desc1, desc3, in.nodeid, queue); break;
+		case FUSE_FLUSH  : res = fuse_op_flush  (desc1, desc3, in.nodeid, queue, delay); break;
+		case FUSE_READ   : res = fuse_op_read   (desc1, desc3, in.nodeid, queue, delay); break;
+		case FUSE_OPEN   :
+		case FUSE_OPENDIR: res = fuse_op_open(desc1, desc3, in.nodeid,
+		                                      in.opcode == FUSE_OPENDIR); break;
 		case FUSE_READDIR: res = fuse_op_readdir(desc1, desc3, in.nodeid,
-		                                         queue,  more,     delay); break;
-		case FUSE_RELDIR : res = fuse_op_reldir (desc1, desc3, in.nodeid); break;
+		                                         queue,  more,    delay); break;
+		case FUSE_RELEASE :
+		case FUSE_RELDIR  : res = fuse_op_close(desc1, desc3, in.nodeid,
+		                                          in.opcode == FUSE_RELDIR); break;
 		default:
 			Logging::printf("virtio_fs: unknown opcode %u len=%u unique=%llx\n",
 			                in.opcode, in.len, unique);
@@ -453,8 +487,150 @@ unsigned Virtio_fs::fuse_op_init(auto const &in, auto &out, uint64 const nodeid)
 }
 
 
-unsigned Virtio_fs::fuse_op_opendir(auto const &in, auto &out,
-                                    uint64 const nodeid)
+unsigned Virtio_fs::fuse_op_unlink(auto const &in, auto &out, uint64 const nodeid)
+{
+	Logging::printf("%s: %u %u out.len =%u \n", __func__, in.len, out.len, out.len);
+
+	if (!in.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	if (!in.addr)
+		return 0u;
+
+	Logging::printf("%s to be implemented - unlink %s\n", __func__, (char *)in_addr);
+	auto name_size = in_size;
+	auto name_ptr  = in_addr;
+
+	Logging::printf("unlink create request size=%u of %u\n", name_size, in_size);
+
+	MessageFs msg(MessageFs::UNLINK, _fs_id, nodeid);
+	msg.buffer.start = name_ptr;
+	msg.buffer.size  = name_size;
+
+	if (!_bus_fs.send(msg))
+		return 0u;
+
+	return 0u;
+}
+
+
+unsigned Virtio_fs::fuse_op_create(auto const &in, auto &out, uint64 const nodeid)
+{
+	Logging::printf("%s: %u %u sizeof %u %u+%u\n", __func__, in.len, out.len,
+	                sizeof(fuse_create_in), sizeof(fuse_entry_out), sizeof(fuse_open_out));
+
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	if (!in_addr || !out_addr || in_size  < sizeof(fuse_create_in)
+	             || out_size < sizeof(fuse_entry_out) + sizeof(fuse_open_out))
+		return 0u;
+
+	auto const &create_in = *reinterpret_cast<fuse_create_in *>(in_addr);
+	auto       &entry_out = *reinterpret_cast<fuse_entry_out *>(out_addr);
+	auto       &open_out  = *reinterpret_cast<fuse_open_out  *>(out_addr + sizeof(entry_out));
+
+	auto name_size = in_size - sizeof(create_in);
+	auto name_ptr  = in_addr + sizeof(create_in);
+
+	Logging::printf("send create request size=%u of %u\n", name_size, in_size);
+	Logging::printf("send create request %s\n", (char *)name_ptr);
+
+	MessageFs msg(MessageFs::CREATE, _fs_id, nodeid);
+	msg.buffer.start = name_ptr;
+	msg.buffer.size  = name_size;
+
+	if (!_bus_fs.send(msg))
+		return 0u;
+
+	open_out.fh         = msg.fh;
+	open_out.open_flags = 0;
+
+	entry_out = { };
+
+	entry_out.nodeid      = msg.fh; /* or parent id ? */
+	entry_out.generation  = 0; /* XXX ? */
+	entry_out.entry_valid = 10; /* 10s */
+	entry_out.attr_valid  = 10; /* 10s */
+	entry_out.entry_valid_nsec = 0; /* + 0ns */
+	entry_out.attr_valid_nsec  = 0; /* + 0ns */
+
+	entry_out.attr.ino    = msg.fh;
+	entry_out.attr.size   = msg.status_file_size();
+	entry_out.attr.blocks = msg.align(msg.status_file_size() / _blk_size, _blk_size);
+
+	entry_out.attr.mtime     = msg.status_mod_time();
+	entry_out.attr.mtimensec = 0;
+#if 0
+	uint64 atime;
+	uint64 ctime;
+	uint32 atimensec;
+	uint32 ctimensec;
+#endif
+	uint32 const rwx = (msg.readable   ? 1 : 0) |
+	                   (msg.writeable  ? 2 : 0) |
+	                   (msg.executable ? 4 : 0);
+
+	entry_out.attr.mode = msg.status_file_type() | rwx;
+#if 0
+	uint32 nlink;
+	uint32 uid;
+	uint32 gid;
+	uint32 rdev;
+#endif
+	entry_out.attr.blksize = _blk_size;
+#if 0
+	uint32 flags;
+#endif
+
+
+	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_flush(auto const &in, auto &out,
+                                  uint64 const nodeid, unsigned const queue,
+                                  bool &delay)
+{
+	if (!in.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	if (!in_addr || in_size  < sizeof(fuse_flush_in))
+		return 0u;
+
+	auto const &flush_in = *reinterpret_cast<fuse_flush_in *>(in_addr);
+
+	MessageFs msg(MessageFs::SYNC, _fs_id, nodeid, queue);
+	msg.fh = flush_in.fh;
+
+	if (!_bus_fs.send(msg))
+		return 0u;
+
+	if (msg.buffer.offset == 0) {
+Logging::printf("flush delayed\n");
+		delay = true;
+		return 0u;
+	}
+
+Logging::printf("flush done\n");
+	return 0u;
+}
+
+
+unsigned Virtio_fs::fuse_op_open(auto const &in, auto &out,
+                                 uint64 const nodeid, bool const isdir)
 {
 	if (!in.len || !out.len)
 		return 0u;
@@ -472,11 +648,14 @@ unsigned Virtio_fs::fuse_op_opendir(auto const &in, auto &out,
 	auto const &open_in  = *reinterpret_cast<fuse_open_in  *>(in_addr);
 	auto       &open_out = *reinterpret_cast<fuse_open_out *>(out_addr);
 
-	if (_verbose)
+	/* flags are presumably FUSE_ASYNC_DIO == 0x8000 and friends */
+//	if (_verbose)
 		Logging::printf("%s: nodeid=%llu flags=%x %x\n", __func__, nodeid,
 		                open_in.flags, open_in.open_flags);
 
-	MessageFs msg(MessageFs::OPEN_DIR, _fs_id, nodeid);
+	MessageFs msg(isdir ? MessageFs::OPEN_DIR : MessageFs::OPEN_FILE,
+	              _fs_id, nodeid);
+
 	if (!_bus_fs.send(msg))
 		return 0u;
 
@@ -484,7 +663,7 @@ unsigned Virtio_fs::fuse_op_opendir(auto const &in, auto &out,
 		return 0u;
 
 	open_out.fh         = msg.fh;
-	open_out.open_flags = 0; /* XXX */
+	open_out.open_flags = 0;
 
 	return out_size;
 }
@@ -536,9 +715,9 @@ unsigned Virtio_fs::fuse_op_readdir(auto const &in, auto &out,
 	/* FUSE_DIRENT_ALIGN in Linux is set to 8 */
 	enum { FUSE_DIRENT_ALIGN = 8 };
 
-	MessageFs msg(MessageFs::READ_DIR, _fs_id, nodeid,
+	MessageFs msg(MessageFs::READ_DIR, _fs_id, nodeid, queue,
 	              S_IFDIR, S_IFLNK, S_IFREG, ed, ei, et, en,
-	              queue, FUSE_DIRENT_ALIGN);
+	              FUSE_DIRENT_ALIGN);
 	msg.fh = read_in.fh;
 
 	msg.buffer.start  = out_addr;
@@ -585,8 +764,8 @@ unsigned Virtio_fs::fuse_op_readdir(auto const &in, auto &out,
 }
 
 
-unsigned Virtio_fs::fuse_op_reldir(auto const &in, auto &out,
-                                   uint64 const nodeid)
+unsigned Virtio_fs::fuse_op_close(auto const &in, auto &out,
+                                  uint64 const nodeid, bool isdir)
 {
 	if (!in.len)
 		return 0u;
@@ -599,12 +778,14 @@ unsigned Virtio_fs::fuse_op_reldir(auto const &in, auto &out,
 
 	auto const &release_in = *reinterpret_cast<fuse_release_in *>(in_addr);
 
-	if (_verbose)
-		Logging::printf("%s: nodeid=%llx fh=%llx flags=%x release_flags=%x lock_owner=%llx\n",
+//	if (_verbose)
+		Logging::printf("%s: nodeid=%llx fh=%llx flags=%x release_flags=%x "
+		                "lock_owner=%llx %s\n",
 		                __func__, nodeid, release_in.fh, release_in.flags,
-		                release_in.release_flags, release_in.lock_owner);
+		                release_in.release_flags, release_in.lock_owner,
+		                isdir ? " dir" : " file");
 
-	MessageFs msg(MessageFs::CLOSE_DIR, _fs_id, nodeid);
+	MessageFs msg(isdir ? MessageFs::CLOSE_DIR : MessageFs::CLOSE_FILE, _fs_id, nodeid);
 	msg.fh = release_in.fh;
 
 	_bus_fs.send(msg);
@@ -613,8 +794,9 @@ unsigned Virtio_fs::fuse_op_reldir(auto const &in, auto &out,
 }
 
 
-unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
-                                   uint64 const nodeid)
+unsigned Virtio_fs::fuse_op_lookup(auto   const &in, auto &out,
+                                   uint64 const  nodeid, unsigned const queue,
+                                   int32        &err)
 {
 	if (!in.len || !out.len)
 		return 0u;
@@ -628,17 +810,17 @@ unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
 	if (!in_addr || !out_addr)
 		return 0u;
 
-	auto const   open_in =  reinterpret_cast<char const * const>(in_addr);
-	auto       &open_out = *reinterpret_cast<fuse_entry_out *>(out_addr);
+	auto const    open_in =  reinterpret_cast<char const * const>(in_addr);
+	auto       &entry_out = *reinterpret_cast<fuse_entry_out *>(out_addr);
 
-	if (out_size < sizeof(open_out))
+	if (out_size < sizeof(entry_out))
 		return 0;
 
 	if (_verbose)
 		Logging::printf("%s: nodeid=%llu name='%s' %lu\n",
 		                __func__, nodeid, open_in, in_size);
 
-	MessageFs msg(MessageFs::LOOKUP, _fs_id, nodeid,
+	MessageFs msg(MessageFs::LOOKUP, _fs_id, nodeid, queue,
 	              S_IFDIR, S_IFLNK, S_IFREG);
 
 	msg.buffer.start  = uintptr_t(open_in);
@@ -648,24 +830,27 @@ unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
 	if (!_bus_fs.send(msg))
 		return 0u;
 
-	if (!msg.ok())
-		return 0u;
+	if (!msg.ok()) {
+		Logging::printf("%s: failed - sent -ENOENT\n", __func__);
+		err = -FUSE_LX_ENOENT;
+		return out_size; /* XXX or 0u ? */
+	}
 
-	open_out = { };
+	entry_out = { };
 
-	open_out.nodeid      = msg.fh; /* or parent id ? */
-	open_out.generation  = 0; /* XXX ? */
-	open_out.entry_valid = 10; /* 10s */
-	open_out.attr_valid  = 10; /* 10s */
-	open_out.entry_valid_nsec = 0; /* + 0ns */
-	open_out.attr_valid_nsec  = 0; /* + 0ns */
+	entry_out.nodeid      = msg.fh; /* or parent id ? */
+	entry_out.generation  = 0; /* XXX ? */
+	entry_out.entry_valid = 10; /* 10s */
+	entry_out.attr_valid  = 10; /* 10s */
+	entry_out.entry_valid_nsec = 0; /* + 0ns */
+	entry_out.attr_valid_nsec  = 0; /* + 0ns */
 
-	open_out.attr.ino    = msg.fh;
-	open_out.attr.size   = msg.status_file_size();
-	open_out.attr.blocks = msg.align(msg.status_file_size() / _blk_size, _blk_size);
+	entry_out.attr.ino    = msg.fh;
+	entry_out.attr.size   = msg.status_file_size();
+	entry_out.attr.blocks = msg.align(msg.status_file_size() / _blk_size, _blk_size);
 
-	open_out.attr.mtime     = msg.status_mod_time();
-	open_out.attr.mtimensec = 0;
+	entry_out.attr.mtime     = msg.status_mod_time();
+	entry_out.attr.mtimensec = 0;
 #if 0
 	uint64 atime;
 	uint64 ctime;
@@ -676,14 +861,14 @@ unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
 	                   (msg.writeable  ? 2 : 0) |
 	                   (msg.executable ? 4 : 0);
 
-	open_out.attr.mode = msg.status_file_type() | rwx;
+	entry_out.attr.mode = msg.status_file_type() | rwx;
 #if 0
 	uint32 nlink;
 	uint32 uid;
 	uint32 gid;
 	uint32 rdev;
 #endif
-	open_out.attr.blksize = _blk_size;
+	entry_out.attr.blksize = _blk_size;
 #if 0
 	uint32 flags;
 #endif
@@ -694,7 +879,7 @@ unsigned Virtio_fs::fuse_op_lookup(auto const &in, auto &out,
 
 
 unsigned Virtio_fs::fuse_op_getattr(auto const &in, auto &out,
-                                    uint64 const nodeid)
+                                    uint64 const nodeid, unsigned const queue)
 {
 	if (!in.len || !out.len)
 		return 0u;
@@ -716,7 +901,7 @@ unsigned Virtio_fs::fuse_op_getattr(auto const &in, auto &out,
 		Logging::printf("%s: nodeid=%llx fh=%llu flags=%lx\n", __func__,
 		                nodeid, attr_in.fh, attr_in.getattr_flags);
 
-	MessageFs msg(MessageFs::GET_ATTR, _fs_id, nodeid,
+	MessageFs msg(MessageFs::GET_ATTR, _fs_id, nodeid, queue,
 	              S_IFDIR, S_IFLNK, S_IFREG);
 
 	if (!_bus_fs.send(msg))
@@ -762,6 +947,104 @@ unsigned Virtio_fs::fuse_op_getattr(auto const &in, auto &out,
 #endif
 
 	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_read(auto const &in, auto &first_desc,
+                                 uint64 const nodeid, unsigned queue,
+                                 bool &delay)
+{
+	if (!in.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	if (!in_addr || in_size < sizeof(fuse_read_in))
+		return 0u;
+
+	auto const &read_in = *reinterpret_cast<fuse_read_in *>(in_addr);
+
+//	if (_verbose)
+		Logging::printf("%s: fh=%llx offset=%llx+%lx r_flags=%x flags=%x\n",
+		                __func__, read_in.fh, read_in.offset, read_in.size,
+		                read_in.read_flags, read_in.flags);
+
+	uint64 out_addr_offset = 0;
+	uint64 ret_read        = 0;
+
+	auto out = first_desc;
+
+	do {
+		if (!out.len)
+			return 0u;
+
+		//if (_verbose)
+			Logging::printf("%s: fh=%llx offset=%llx+%lx r_flags=%x flags=%x\n",
+			                __func__, read_in.fh, read_in.offset + ret_read,
+			               read_in.size, read_in.read_flags, read_in.flags);
+
+		auto const out_addr = vmm_address(out.addr, out.len);
+		auto const out_size = out.len;
+
+		if (!out_addr || !out_size)
+			return 0u;
+
+		auto &used_queue = _queues[queue].queue;
+
+		MessageFs msg(MessageFs::READ_FILE, _fs_id, nodeid, queue);
+
+		msg.buffer.start  = out_addr + out_addr_offset;
+		msg.buffer.size   = (read_in.size - ret_read < out_size - out_addr_offset)
+		                  ?  read_in.size - ret_read : out_size - out_addr_offset;
+		msg.buffer.offset = read_in.offset + ret_read;
+
+		if (!_bus_fs.send(msg))
+			return 0u;
+
+		if (!msg.ok())
+			return 0u;
+
+		if (msg.buffer.offset == 0) {
+			Logging::printf("read delay \n");
+			delay = true;
+			return 0u;
+		}
+
+		//if (_verbose)
+			Logging::printf("msg offset %llu size=%llu -> ret_read=%llu -> %llu-%llu -> %llu\n",
+			                msg.buffer.offset, msg.buffer.size,
+			                ret_read, msg.buffer.offset, read_in.offset, msg.buffer.offset - read_in.offset);
+
+		ret_read = msg.buffer.offset - read_in.offset;
+
+		uint64 locate_pos = 0;
+		out = first_desc;
+		do {
+			locate_pos += out.len;
+
+			if (ret_read < locate_pos) {
+				out_addr_offset = ret_read - (locate_pos - out.len);
+
+				auto desc = used_queue.next_desc(out);
+				if (!desc.len) {
+					Logging::printf("break loop for now -- actually size is required of file ...\n");
+					out = desc;
+				}
+
+				break;
+			}
+
+			out = used_queue.next_desc(out);
+			out_addr_offset = 0;
+		} while (out.len && locate_pos < ret_read);
+
+	} while (out.len && ret_read < read_in.size);
+
+	if (_verbose)
+		Logging::printf("read file ret_read=%llu<?%llu delay=%d\n", ret_read, read_in.size, delay);
+
+	return unsigned(ret_read);
 }
 
 

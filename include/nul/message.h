@@ -919,11 +919,16 @@ struct MessageAudio
 
 struct MessageFs
 {
-	enum Type { INIT, OPEN_DIR, READ_DIR, CLOSE_DIR, LOOKUP, GET_ATTR };
+	enum Type {
+		INIT, LOOKUP, GET_ATTR, SYNC, CREATE, UNLINK,
+		OPEN_DIR, READ_DIR, CLOSE_DIR,
+		OPEN_FILE, READ_FILE, CLOSE_FILE
+	};
 
 	unsigned  const fs_id;
 	enum Type const type;
 	uint64    const nodeid;
+	unsigned  const queue;
 
 	uint64          fh { };
 
@@ -950,18 +955,17 @@ struct MessageFs
 	unsigned const e_off_type;
 	unsigned const e_off_name;
 
-	unsigned const queue;
 	unsigned const align_offset;
 
-	MessageFs(Type const t, unsigned fsid, uint64 node = 0,
+	MessageFs(Type const t, unsigned fsid, uint64 node = 0, unsigned q = 0,
 	          uint32 ftd = 0, uint32 fts = 0, uint32 ftr = 0,
 	          unsigned ed = 0, unsigned ei = 0, unsigned et = 0, unsigned en = 0,
-	          unsigned q = 0, unsigned algn_off = 0)
+	          unsigned algn_off = 0)
 	:
-		fs_id(fsid), type(t), nodeid(node),
+		fs_id(fsid), type(t), nodeid(node), queue(q),
 		file_type_dir(ftd), file_type_sym(fts), file_type_regular(ftr),
 		e_off_dirsize(ed), e_off_inode(ei), e_off_type(et), e_off_name(en),
-		queue(q), align_offset(algn_off)
+		align_offset(algn_off)
 	{ }
 
 	void fail()     { fh = ~0ull; }

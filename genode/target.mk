@@ -8,6 +8,7 @@ LIBS   += base blit format
 LIBS   += seoul-qemu-usb
 SRC_CC  = component.cc user_env.cc device_model_registry.cc state.cc xhci.cc
 SRC_CC += console.cc keyboard.cc network.cc disk.cc vga_vesa.cc audio.cc
+SRC_CC += file.cc
 SRC_BIN = mono.tff
 
 MODEL_SRC_CC    += $(notdir $(wildcard $(SEOUL_CONTRIB_DIR)/model/*.cc))
