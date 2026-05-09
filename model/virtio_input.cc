@@ -217,8 +217,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 {
 	private:
 
-		unsigned    const  _device { 0x10002 };
-		Seoul::Lock        _lock { };
+		unsigned     const  _device       { 0x10002 };
+		Seoul::Lock         _lock         { };
 		Virtio_input_config _input_config { };
 
 		~Virtio_input();
@@ -229,18 +229,24 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 		unsigned res_y { };
 
 		Virtio_input(DBus<MessageIrqLines>  &bus_irqlines,
+		             DBus<MessageMem>       &bus_mem,
 		             DBus<MessageMemRegion> &bus_memregion,
 		             uint64 const bar_addr,
 		             uint8  const irq_pin,
 		             uint8  const irq_line,
-		             uint16 const bdf)
+		             uint16 const bdf,
+		             bool   const msix,
+		             bool   const verbose)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq_pin, irq_line, bdf,
+			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
+			               irq_pin, irq_line, bdf,
 			               18 /* virtio type */,
 			               0x09020001, /* pci class code (input), sub class (mouse), prog if, rev. id */
 			               bar_addr,
-			               2 /* queues */)
-		{ }
+			               2 /* queues */, msix)
+		{
+			_verbose = verbose;
+		}
 
 		bool receive(MessageBios &msg)
 		{
@@ -289,7 +295,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			});
 		}
 
-		bool button_click(MessageInput &msg)
+		bool button_click(MessageInput &msg, Queue &queue)
 		{
 			bool const button_left   = msg.data  & (1u << 31);
 			bool const button_middle = msg.data  & (1u << 30);
@@ -340,14 +346,14 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 				return 8;
 			};
 
-			bool const inject = _queues[0].queue.consume(button);
+			bool const inject = queue.queue.consume(button);
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(queue);
 
 			return true;
 		}
 
-		bool scroll_wheel(MessageInput &msg)
+		bool scroll_wheel(MessageInput &msg, Queue &queue)
 		{
 			bool const valid = msg.data & (1u << 28);
 
@@ -390,9 +396,9 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 				return 8;
 			};
 
-			bool const inject = _queues[0].queue.consume(wheel);
+			bool const inject = queue.queue.consume(wheel);
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(queue);
 
 			return true;
 		}
@@ -424,10 +430,10 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 			if (!queue.queue.enabled())
 				return false;
 
-			if (button_click(msg))
+			if (button_click(msg, queue))
 				return true;
 
-			if (scroll_wheel(msg))
+			if (scroll_wheel(msg, queue))
 				return true;
 
 			enum {
@@ -475,7 +481,7 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 
 			bool const inject = queue.queue.consume(read_x);
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(queue);
 
 			return true;
 		}
@@ -507,8 +513,8 @@ class Virtio_input: public StaticReceiver<Virtio_input>, Virtio::Device
 };
 
 PARAM_HANDLER(virtio_input,
-	      "virtio_input:mem,xmax,ymax - attach an virtio input to the PCI bus",
-	      "Example: 'virtio_input:0xe0200000,4096,4096'",
+	      "virtio_input:mem,xmax,ymax,msix,verbose - attach an virtio input to the PCI bus",
+	      "Example: 'virtio_input:0xe0200000,4096,4096,1,0'",
 	      "If no bdf is given a free one is used.")
 {
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
@@ -519,12 +525,16 @@ PARAM_HANDLER(virtio_input,
 	auto const irq_line = 11; /* defined by acpicontroller dsdt for INTC# */
 	auto const bar_base = argv[0];
 
+	bool const msix    = (argv[4] == ~0UL) ? true  : !!argv[4];
+	bool const verbose = (argv[5] == ~0UL) ? false : !!argv[5];
+
 	if (argv[0] == ~0UL)
 		Logging::panic("virtio_input: missing bar address");
 
-	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_memregion,
+	Virtio_input *dev = new Virtio_input(mb.bus_irqlines, mb.bus_mem,
+	                                     mb.bus_memregion,
 	                                     bar_base, irq_pin, irq_line,
-	                                     uint16(bdf));
+	                                     uint16(bdf), msix, verbose);
 
 	mb.bus_pcicfg.add(dev, Virtio_input::receive_static<MessagePciConfig>);
 	mb.bus_mem   .add(dev, Virtio_input::receive_static<MessageMem>);
@@ -534,5 +544,8 @@ PARAM_HANDLER(virtio_input,
 	dev->res_x = (argv[2] == ~0UL) ? 4 * 4096 : unsigned(argv[2]);
 	dev->res_y = (argv[3] == ~0UL) ? 4 * 4096 : unsigned(argv[3]);
 
-	Logging::printf("virtio input resolution %ux%u\n", dev->res_x, dev->res_y);
+	Logging::printf("%x:%x.%u virtio input resolution %ux%u - %s\n",
+	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7,
+	                dev->res_x, dev->res_y,
+	                msix ? "MSIX" : "GSI");
 }

@@ -1,7 +1,7 @@
 /**
  * Virtio PCI device
  *
- * Copyright (C) 2021-2022, Alexander Boettcher
+ * Copyright (C) 2021-2026, Alexander Boettcher
  *
  * This file is part of Seoul.
  *
@@ -26,6 +26,7 @@
 namespace Virtio {
 	struct Vendor_cap;
 	struct Power_cap;
+	struct Msix_cap;
 	class  Device;
 }
 
@@ -46,13 +47,13 @@ struct Virtio::Vendor_cap
 		};
 	};
 
-	unsigned bar;
-	unsigned offset;
-	unsigned length;
-	Layout   cap { };
+	unsigned const bar;
+	unsigned const offset;
+	unsigned const length;
+	Layout         cap { };
 
 	Vendor_cap(uint8 next_cap, Layout::Types type,
-	        unsigned bar, unsigned offset, unsigned length)
+	           unsigned bar, unsigned offset, unsigned length)
 	:
 		bar(bar), offset(offset), length(length)
 	{
@@ -99,8 +100,7 @@ struct Virtio::Power_cap
 
 	Power_cap(uint8 next_cap)
 	{
-		enum { POWER = 1 };
-		cap.id   = POWER;
+		cap.id   = 1; /* POWER */;
 		cap.next = next_cap;
 		cap.len  = 8;
 	}
@@ -128,11 +128,82 @@ struct Virtio::Power_cap
 	}
 };
 
+struct Virtio::Msix_cap
+{
+	struct {
+		union {
+			struct {
+				uint8  id;
+				uint8  next;
+				union {
+					struct {
+						uint16 table_size : 11;
+						uint16 unused     :  3;
+						uint16 func_mask  :  1;
+						uint16 enable     :  1;
+					};
+					struct { uint16 val; };
+				};
+			};
+			struct { uint32 value; };
+		};
+	} cap { };
+
+	uint32 const table_bar;
+	uint32 const table_offset;
+	uint32 const pending_bar;
+	uint32 const pending_offset;
+
+	enum   { MAX_MSIX = 6 };
+	struct { uint32 low, high, data, ctrl; } msix_table [MAX_MSIX] { };
+
+	Msix_cap(uint8 next_cap, uint32 table_bar, uint32 table_offset,
+	         uint32 pending_bar, uint32 pending_offset, uint8 max_queues)
+	:
+	  table_bar(table_bar), table_offset(table_offset),
+	  pending_bar(pending_bar), pending_offset(pending_offset)
+	{
+		cap.id         = 0x11 /* MSIX */;
+		cap.next       = next_cap;
+		cap.table_size = max_queues > MAX_MSIX
+		               ? uint8(MAX_MSIX - 1) : uint8(max_queues - 1);
+
+		static_assert(sizeof(cap) == 4, "cap size mismatch");
+	}
+
+	unsigned read(unsigned const off) const
+	{
+		switch (off) {
+		case 0:
+			return cap.value;
+		case 4:
+			return (table_offset   & ~0x7u) | (table_bar & 0x7);
+		case 8:
+			return (pending_offset & ~0x7u) | (pending_bar & 0x7);
+		default:
+			return ~0U;
+		}
+	}
+
+	void write(unsigned const off, unsigned const value)
+	{
+		switch (off) {
+		case 0:
+			cap.value |= value & (0x3u << 30);
+			break;
+		default:
+			Logging::printf("msix ? write off %u <- %x\n", off, value);
+			break;
+		}
+	}
+};
+
 class Virtio::Device
 {
 	protected:
 
 		DBus<MessageIrqLines>  &_bus_irqlines;
+		DBus<MessageMem>       &_bus_mem;
 		DBus<MessageMemRegion> &_bus_memregion;
 
 		/* isr, config, notify structures are part of the first BAR MEM by now */
@@ -141,6 +212,10 @@ class Virtio::Device
 			BAR_OFFSET_ISR        = 0x200,
 			BAR_OFFSET_CONFIG     = 0x400,
 			BAR_OFFSET_NOTIFY     = 0x600,
+
+			BAR_OFFSET_MSIX_TABLE   = 0x800,
+			BAR_OFFSET_MSIX_PENDING = 0x900,
+
 			RANGE_SIZE            = 0x200,
 			NOTIFY_OFF_MULTIPLIER = 8, /* for 64bit wide access */
 
@@ -148,30 +223,35 @@ class Virtio::Device
 
 			QUEUES_MAX = 4,
 
-			VIRTIO_QUEUE_SIZE = 512
+			VIRTIO_QUEUE_SIZE = 512,
+
+			NO_VECTOR = 0xffff /* according to spec to disable MSIX */
 		};
 
 		uint8  const _pin;
 		uint8  const _irq;
 		uint8  const _device_type;
-		uint32 const _pci_type; /* class code, sub class, prog if, rev. id */
 		uint8  const _queues_count;
+		uint32 const _pci_type; /* class code, sub class, prog if, rev. id */
 
-		uint16 const _bdf;
 		uint64       _phys_bar_base;
 
-		Power_cap    _power { 0x50 };
+		uint16 const _bdf;
+		uint16       _msix_vector_config { };
+		uint32       _msix_vector        { };
 
 		bool         _bar0_size      { false };
 		bool         _all_notify     { false };
 		bool         _verbose        { false };
 		bool         _config_changed { false };
+		bool         _inc_generation { false };
 
+		bool         _msi_support;
 		bool         _assert_irq   { };
 		bool         _deassert_irq { };
 
 		uint32       _control   { 0 };
-		uint32       _status    { 1u << 20 /* cap list support */ };
+		uint32       _status    { 1u << 4 /* cap list support */ };
 
 		uint32       _dev_feature_word  { 0 };
 		uint32       _drv_feature_word  { 0 };
@@ -179,9 +259,15 @@ class Virtio::Device
 		uint8        _config_generation { 0 };
 		uint16       _queue_select      { 0 };
 
+		Power_cap    _power      { 0x50 };
+		Msix_cap     _msix_state { 0x00, BAR_ID, BAR_OFFSET_MSIX_TABLE,
+		                                 BAR_ID, BAR_OFFSET_MSIX_PENDING,
+		                                 uint8(_queues_count + 1) };
+
 		struct Queue {
-			unsigned queue_size    { VIRTIO_QUEUE_SIZE };
-			uint32   phys_addr [6] { };
+			uint16 queue_size         { VIRTIO_QUEUE_SIZE };
+			uint16 msix_vector_queue  { };
+			uint32 phys_addr [6]      { };
 
 			uint64 descriptor_area() {
 				return  uint64(phys_addr[0]) |
@@ -251,9 +337,9 @@ class Virtio::Device
 		uint8 config_generation()
 		{
 
-			if (_config_changed) {
+			if (_inc_generation) {
 				_config_generation ++;
-				_config_changed = false;
+				_inc_generation = false;
 			}
 
 			return _config_generation;
@@ -267,6 +353,8 @@ class Virtio::Device
 			bool deassert_irq = false;
 			bool result       = false;
 
+			uint32 msix_vector = 0;
+
 			{
 				Seoul::Lock::Guard guard(lock);
 
@@ -274,40 +362,51 @@ class Virtio::Device
 
 				assert_irq   = _assert_irq;
 				deassert_irq = _deassert_irq;
+				msix_vector  = _msix_vector;
 
-				_assert_irq = _deassert_irq = false;
+				_assert_irq  = _deassert_irq = false;
+				_msix_vector = NO_VECTOR;
 			}
 
-			assert_irqs(assert_irq, deassert_irq);
+			assert_irqs(assert_irq, deassert_irq, msix_vector);
 
 			return result;
 		}
 
+		bool intx_disabled() const { return !!(_control & (1 << 10)); }
+
 	public:
 
 		Device(DBus<MessageIrqLines>  &bus_irqlines,
+		       DBus<MessageMem>       &bus_mem,
 		       DBus<MessageMemRegion> &bus_memregion,
-		       uint8 const pin, uint8 const _irq, unsigned short const bdf,
-		       uint8 const device_type, uint32 const pci_class,
-		       uint64 const phys_bar_base, uint8 const queues_count)
+		       uint8  const pin,           uint8  const irq, uint16 const bdf,
+		       uint8  const device_type,   uint32 const pci_class,
+		       uint64 const phys_bar_base, uint8  const queues_count,
+		       bool   const msi)
 		:
-			_bus_irqlines(bus_irqlines), _bus_memregion(bus_memregion),
-			_pin(pin), _irq(_irq), _device_type(device_type),
-			_pci_type(pci_class), _queues_count(queues_count), _bdf(bdf),
-			_phys_bar_base(phys_bar_base)
+			_bus_irqlines(bus_irqlines), _bus_mem(bus_mem),
+			_bus_memregion(bus_memregion),
+			_pin(pin), _irq(irq), _device_type(device_type),
+			_queues_count(queues_count), _pci_type(pci_class),
+			_phys_bar_base(phys_bar_base), _bdf(bdf), _msi_support(msi)
 		{ }
 
 		void reset()
 		{
 			_control = 0u;
-			_status  = 1u << 20 /* cap list support */;
+			_status  = 1u << 4 /* cap list support */;
 
 			_bar0_size      = false;
 			_all_notify     = false;
 			_config_changed = false;
+			_inc_generation = false;
 
 			_assert_irq     = false;
 			_deassert_irq   = false;
+
+			_msix_vector        = 0u;
+			_msix_vector_config = 0u;
 
 			_dev_feature_word  = 0u;
 			_drv_feature_word  = 0u;
@@ -320,11 +419,10 @@ class Virtio::Device
 
 		void reset_queues()
 		{
-			for (unsigned i = 0; i < QUEUES_MAX; i++) {
-				_queues[i].queue_size = VIRTIO_QUEUE_SIZE;
-				for (unsigned j = 0; j < sizeof(_queues)/sizeof(_queues[0]); j++)
-					_queues[i].phys_addr[j] = 0u;
-				_queues[i].queue = { };
+			for (auto &queue : _queues) {
+				queue.queue_size = VIRTIO_QUEUE_SIZE;
+				for (auto &phys : queue.phys_addr) phys = 0u;
+				queue.queue = { };
 			}
 		}
 
@@ -341,7 +439,7 @@ class Virtio::Device
 					msg.value = ((0x1040u + _device_type) << 16) | 0x1AF4u;
 					break;
 				case 0x04: /* status & control */
-					msg.value = _status | _control;
+					msg.value = (_status << 16) | _control;
 					break;
 				case 0x08: /* class code, sub class, prog if, rev. id */
 					msg.value = _pci_type;
@@ -368,10 +466,9 @@ class Virtio::Device
 				case 0x3c: /* max lat, min grant, intr pin, intr line */
 					msg.value = (unsigned(_pin) << 8) | unsigned(_irq);
 					break;
-				case 0x40 ... 0x44: {
+				case 0x40 ... 0x44:
 					msg.value = _power.read(msg.dword * 4 - 0x40);
 					break;
-				}
 				case 0x50 ... 0x5c:
 				{
 					Vendor_cap cap(0x60, Vendor_cap::Layout::Types::COMMON_CFG,
@@ -395,13 +492,17 @@ class Virtio::Device
 				}
 				case 0x80 ... 0x8c:
 				{
-					Vendor_cap cap(0x00, Vendor_cap::Layout::Types::NOTIFY_CFG,
+					Vendor_cap cap(_msi_support ? 0xa0 : 0x00,
+					               Vendor_cap::Layout::Types::NOTIFY_CFG,
 					               BAR_ID, BAR_OFFSET_NOTIFY, RANGE_SIZE);
 					msg.value = cap.read(msg.dword * 4 - 0x80);
 					break;
 				}
 				case 0x90: /* part of NOTIFY_CFG -> notify_off_multiplier */
 					msg.value = _all_notify ? 0 : NOTIFY_OFF_MULTIPLIER;
+					break;
+				case 0xa0 ... 0xbc:
+					msg.value = _msix_state.read(msg.dword * 4 - 0xa0);
 					break;
 				default:
 					msg.value = 0;
@@ -427,6 +528,9 @@ class Virtio::Device
 				case 0x44: /* PCI power cap, 2nd half */
 					_power.write(4, msg.value);
 					notify_power(_power.read(4));
+					break;
+				case 0xa0 ... 0xbc:
+					_msix_state.write(msg.dword * 4 - 0xa0, msg.value);
 					break;
 				default:
 					break;
@@ -503,7 +607,10 @@ class Virtio::Device
 				break;
 			case 0x10: /* msix config, num queues */
 				if (msg.read)
-					*msg.ptr = unsigned(_queues_count) << 16;
+					*msg.ptr = (unsigned(_queues_count) << 16)
+					         | (unsigned(_msix_vector_config));
+				else
+					_msix_vector_config = uint16(*msg.ptr);
 				break;
 			case 0x14: /* device status (1), config gen (1), queue select (2) */
 				if (msg.read)
@@ -520,10 +627,14 @@ class Virtio::Device
 				break;
 			case 0x18: /* queue size, queue msix vector */
 				if (msg.read)
-					*msg.ptr = queue().queue_size;
+					*msg.ptr = (uint32(queue().msix_vector_queue) << 16)
+					         | queue().queue_size;
 				else {
-					if (*msg.ptr && ((*msg.ptr & 0xfffful) <= VIRTIO_QUEUE_SIZE))
-						queue().queue_size = *msg.ptr & 0xfffful;
+					if (*msg.ptr) {
+						if ((*msg.ptr & 0xfffful) <= VIRTIO_QUEUE_SIZE)
+							queue().queue_size = *msg.ptr & 0xfffful;
+						queue().msix_vector_queue = uint16(*msg.ptr >> 16);
+					}
 				}
 				break;
 			case 0x1c: /* queue enable, queue notify offset */
@@ -571,7 +682,12 @@ class Virtio::Device
 				if (msg.read) {
 					if (_status & (1 << 3)) {
 						/* 0x1 - queue interrupt, 0x2 configuration change */
-						*msg.ptr = 0x1 | (_config_changed ? 0x2 : 0x0);
+						*msg.ptr = (_config_changed ? 0x2 : 0x1);
+
+						if (_config_changed) {
+							_inc_generation = true;
+							_config_changed = false;
+						}
 
 						/* read clears & deassert IRQ */
 						_status &= ~(1u << 3);
@@ -582,6 +698,44 @@ class Virtio::Device
 						*msg.ptr = 0;
 				}
 				break;
+			case BAR_OFFSET_MSIX_TABLE ... BAR_OFFSET_MSIX_TABLE +
+			                               (RANGE_SIZE / 2) - 4:
+			{
+				auto const row = (offset - BAR_OFFSET_MSIX_TABLE) / (4*4);
+				auto const off = (offset - BAR_OFFSET_MSIX_TABLE) % (4*4);
+				if (row >= Msix_cap::MAX_MSIX) {
+					*msg.ptr = ~0u;
+					break;
+				}
+
+				if (msg.read) {
+					switch (off) {
+					case  0: *msg.ptr = _msix_state.msix_table[row].low;  break;
+					case  4: *msg.ptr = _msix_state.msix_table[row].high; break;
+					case  8: *msg.ptr = _msix_state.msix_table[row].data; break;
+					case 12: *msg.ptr = _msix_state.msix_table[row].ctrl; break;
+					default: *msg.ptr = ~0u; break;
+					}
+				} else {
+					switch (off) {
+					case  0: _msix_state.msix_table[row].low  = *msg.ptr; break;
+					case  4: _msix_state.msix_table[row].high = *msg.ptr; break;
+					case  8: _msix_state.msix_table[row].data = *msg.ptr; break;
+					case 12: _msix_state.msix_table[row].ctrl = *msg.ptr; break;
+					default: break;
+					}
+				}
+				if (_verbose)
+					Logging::printf("%x:%x.%u msix offset bar %llx row=%llu value=%x- %s\n",
+					                (_bdf >> 8) & 0xff, (_bdf >> 3) & 0x1f,
+					                _bdf & 0x7, offset, row, *msg.ptr,
+					                msg.read ? "read" : "write");
+				break;
+			}
+			case BAR_OFFSET_MSIX_PENDING ... BAR_OFFSET_MSIX_PENDING +
+			                                 (RANGE_SIZE / 2) - 4:
+				Logging::printf("msix pending offset bar %llx %s\n", offset,
+				                msg.read ? "read" : "write");
 			}
 
 			if (msg.read && show)
@@ -592,15 +746,45 @@ class Virtio::Device
 			return true;
 		}
 
-		void inject_irq()
+		void inject_irq_via_queue(Queue const &q)
 		{
-			_status |= 1u << 3; /* not required for MSI-X XXX */
+			_status |= 1u << 3;
 
-			_assert_irq = true;
+			_assert_irq  = true;
+			_msix_vector = q.msix_vector_queue;
 		}
 
-		void assert_irqs(bool assert_irq, bool deassert_irq)
+		void inject_config_irq()
 		{
+			_status |= 1u << 3;
+
+			_assert_irq  = true;
+			_msix_vector = _msix_vector_config;
+		}
+
+		void assert_irqs(bool assert_irq, bool deassert_irq, uint32 msix_idx)
+		{
+			if (_msix_state.cap.enable) {
+
+				if (!assert_irq && !deassert_irq)
+					return;
+
+				if (msix_idx >= Msix_cap::MAX_MSIX || msix_idx == NO_VECTOR)
+					return;
+
+				auto &entry = _msix_state.msix_table[msix_idx];
+				auto  addr  = (uint64(entry.high) << 32) | uint64(entry.low);
+
+				if (!(entry.ctrl & 0x1)) {
+					MessageMem msg(false /* write */, addr, &entry.data);
+					_bus_mem.send(msg);
+				}
+				return;
+			}
+
+			if (intx_disabled())
+				return;
+
 			if (deassert_irq) {
 				MessageIrqLines msg(MessageIrq::DEASSERT_IRQ, _irq);
 				_bus_irqlines.send(msg);
