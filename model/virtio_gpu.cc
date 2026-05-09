@@ -175,7 +175,6 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		Seoul::Lock           _lock { };
 		Virtio_gpu_config     _config          { };
 		bool                  _memory_pressure { };
-		bool const            _verbose;
 
 		/*
 		 * heuristic to hide window when exiting to vga/vesa console
@@ -374,23 +373,26 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 		uint64   shape_ptr  { };
 
 		Virtio_gpu(DBus<MessageIrqLines>  &bus_irqlines,
+		           DBus<MessageMem>       &bus_mem,
 		           DBus<MessageMemRegion> &bus_memregion,
 		           DBus<MessageConsole>   &bus_console,
 		           uint64 const bar_addr,
 		           uint8  const irq_pin,
 		           uint8  const irq_line,
 		           uint16 const bdf,
-		           bool   const verbose)
+		           bool   const verbose,
+		           bool   const msix)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq_pin,
-			               irq_line, bdf,
+			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
+			               irq_pin, irq_line, bdf,
 			               16            /* virtio type */,
 			               0x03800001,   /* display + GPU + rev 1 */
 			               bar_addr,
-			               2             /* queues */),
-			_bus_console(bus_console),
-			_verbose(verbose)
-		{ }
+			               2             /* queues */, msix),
+			_bus_console(bus_console)
+		{
+			_verbose = verbose;
+		}
 
 		bool receive(MessagePciConfig &msg)
 		{
@@ -484,7 +486,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				_config.event = VIRTIO_GPU_EVENT;
 
 				config_changed();
-				inject_irq();
+				inject_config_irq();
 
 				return true;
 			});
@@ -556,9 +558,9 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 
 			/* queue == 0, controlq --- queue == 1, cursorq */
 
-			auto &used_queue = _queues[queue].queue;
+			auto &used_queue = _queues[queue];
 
-			bool inject = used_queue.consume([&] (auto const descriptor, auto) {
+			bool inject = used_queue.queue.consume([&] (auto const descriptor, auto) {
 
 				auto const request = vmm_address(descriptor.addr, descriptor.len);
 				auto const request_size = descriptor.len;
@@ -589,13 +591,13 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 				uintptr_t response = 0; size_t response_size = 0;
 				uintptr_t desc2 = 0; size_t desc2_size = 0;
 
-				auto desc1 = used_queue.next_desc(descriptor);
+				auto desc1 = used_queue.queue.next_desc(descriptor);
 				if (desc1.len) {
 					response      = vmm_address(desc1.addr, desc1.len);
 					response_size = desc1.len;
 				}
 
-				auto descx  = used_queue.next_desc(desc1);
+				auto descx  = used_queue.queue.next_desc(desc1);
 				if (descx.len) {
 					desc2      = vmm_address(descx.addr, descx.len);
 					desc2_size = descx.len;
@@ -647,7 +649,7 @@ class Virtio_gpu: public StaticReceiver<Virtio_gpu>, Virtio::Device
 			});
 
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(used_queue);
 		}
 
 		uint32 dev_feature     (unsigned)         override { return 0u; }
@@ -1185,12 +1187,10 @@ size_t Virtio_gpu::_gpu_move_to_host(uintptr_t const in,  size_t const in_size,
 }
 
 PARAM_HANDLER(virtio_gpu,
-	      "virtio_gpu:mem,bdf - attach an virtio gpu device to the PCI bus",
-	      "Example: 'virtio_gpu:0xe0400000,0x30' to attach on 00:06.0 on address",
+	      "virtio_gpu:mem,bdf,msix,verbose - attach an virtio gpu device to the PCI bus",
+	      "Example: 'virtio_gpu:0xe0400000,0x30,1,0' to attach on 00:06.0 on address",
 	      "If no bdf is given a free one is used.")
 {
-	bool const verbose = false;
-
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_gpu: invalid bdf\n");
@@ -1199,12 +1199,16 @@ PARAM_HANDLER(virtio_gpu,
 	auto const irq_line = 10; /* defined by acpicontroller dsdt INTB# */
 	auto const bar_base = argv[0];
 
+	bool const msix    = (argv[2] == ~0UL) ? true  : !!argv[2];
+	bool const verbose = (argv[3] == ~0UL) ? false : !!argv[3];
+
 	if (argv[0] == ~0UL)
 		Logging::panic("virtio_gpu: missing bar address");
 
-	Virtio_gpu *dev = new Virtio_gpu(mb.bus_irqlines, mb.bus_memregion,
-	                                 mb.bus_console, bar_base, irq_pin,
-	                                 irq_line, uint16(bdf), verbose);
+	Virtio_gpu *dev = new Virtio_gpu(mb.bus_irqlines, mb.bus_mem,
+	                                 mb.bus_memregion, mb.bus_console,
+	                                 bar_base, irq_pin,
+	                                 irq_line, uint16(bdf), verbose, msix);
 
 	mb.bus_pcicfg .add(dev, Virtio_gpu::receive_static<MessagePciConfig>);
 	mb.bus_mem    .add(dev, Virtio_gpu::receive_static<MessageMem>);
@@ -1229,8 +1233,10 @@ PARAM_HANDLER(virtio_gpu,
 	dev->mode_next.width  = info.resolution[0];
 	dev->mode_next.height = info.resolution[1];
 
-	Logging::printf("virtio gpu %ux%u\n",
-	                dev->mode_host.width, dev->mode_host.height);
+	Logging::printf("%x:%x.%u virtio gpu %ux%u - %s\n",
+	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7,
+	                dev->mode_host.width, dev->mode_host.height,
+	                msix ? "MSIX" : "GSI");
 
 	MessageConsole msg2(MessageConsole::TYPE_ALLOC_VIEW, dev->console_id);
 	msg2.view = 1;

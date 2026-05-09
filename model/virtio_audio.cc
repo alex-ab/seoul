@@ -95,9 +95,6 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		Seoul::Lock         _lock { };
 		Virtio_sound_state _state { };
 
-		bool _verbose { false };
-
-
 		~Virtio_sound();
 
 		struct snd_hdr {
@@ -340,29 +337,34 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		size_t _jack_info(uintptr_t, size_t, uintptr_t, size_t, uintptr_t, size_t);
 		size_t _pcm_info(uintptr_t, size_t, uintptr_t, size_t, uintptr_t, size_t);
 		size_t _pcm_set_param(uintptr_t, size_t, uintptr_t, size_t);
-		size_t _pcm_op(uintptr_t, size_t, uintptr_t, size_t, unsigned, Virtio::Queue &);
+		size_t _pcm_op(uintptr_t, size_t, uintptr_t, size_t, unsigned, Virtio::Device::Queue &);
 		size_t _chmap_info(uintptr_t, size_t, uintptr_t, size_t, uintptr_t, size_t);
 
 	public:
 
 		Virtio_sound(DBus<MessageIrqLines>  &bus_irqlines,
+		             DBus<MessageMem>       &bus_mem,
 		             DBus<MessageMemRegion> &bus_memregion,
 		             DBus<MessageAudio>     &bus_audio,
 		             Clock                  &clock,
 		             uint64 const bar_addr,
 		             uint8  const irq_pin,
 		             uint8  const irq_line,
-		             uint16 const bdf)
+		             uint16 const bdf,
+		             bool   const msix,
+		             bool   const verbose)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq_pin,
-			               irq_line, bdf,
+			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
+			               irq_pin, irq_line, bdf,
 			               25 /* virtio type */,
 			               0x04030001, /* pci class (multimedia), subclass (audio) */
 			               bar_addr,
-			               4 /* queues */),
+			               4 /* queues */, msix),
 			_bus_audio(bus_audio),
 			_clock(clock)
-		{ }
+		{
+			_verbose = verbose;
+		}
 
 		bool receive(MessageBios &msg)
 		{
@@ -412,7 +414,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 
 		bool receive(MessageAudio &msg)
 		{
-			auto &queue_tx = _queues[2].queue;
+			auto &queue_tx = _queues[2];
 
 			if (msg.type != MessageAudio::Type::AUDIO_CONTINUE_TX)
 				return false;
@@ -446,9 +448,9 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			});
 		}
 
-		void tx_drain(Virtio::Queue &tx_queue)
+		void tx_drain(Virtio::Device::Queue &tx_queue)
 		{
-			bool const inject = tx_queue.consume([&] (auto const descriptor, auto ring) {
+			bool const inject = tx_queue.queue.consume([&] (auto const descriptor, auto ring) {
 				auto const request = vmm_address(descriptor.addr, descriptor.len);
 				size_t const request_size = descriptor.len;
 
@@ -473,7 +475,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			_state.consumed_bytes = 0;
 
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(tx_queue);
 		}
 
 		enum Tx_return { DONE, DELAY, DRAIN };
@@ -596,11 +598,11 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			return drain ? false : true;
 		}
 
-		bool tx(Virtio::Queue &tx_queue)
+		bool tx(Virtio::Device::Queue &tx_queue)
 		{
 			bool drain = false;
 
-			bool const inject = tx_queue.consume([&] (auto const descriptor, auto ring) {
+			bool const inject = tx_queue.queue.consume([&] (auto const descriptor, auto ring) {
 				auto const request = vmm_address(descriptor.addr, descriptor.len);
 				size_t const request_size = descriptor.len;
 
@@ -627,7 +629,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 
 				if (!_state.idx_valid) {
 					unsigned host_msg_id = 0;
-					auto tx_result = tx_handle(tx_queue, descriptor, host_msg_id);
+					auto tx_result = tx_handle(tx_queue.queue, descriptor, host_msg_id);
 					if (tx_result == Tx_return::DRAIN) {
 						drain = true;
 						return 0UL;
@@ -646,7 +648,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 					_state.consumed_bytes = 0;
 				}
 
-				if (!tx_loop(tx_queue, ring, 0))
+				if (!tx_loop(tx_queue.queue, ring, 0))
 					drain = true;
 
 				return 0UL;
@@ -656,7 +658,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 				return false;
 
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(tx_queue);
 
 			return true;
 		}
@@ -665,10 +667,10 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 		{
 			/* queue: 0 - controlq, 1 - eventq, 2 - tx, 3 - rx */
 
-			auto &queue_use = _queues[queue].queue;
-			auto &queue_tx  = _queues[2].queue;
+			auto &queue_use = _queues[queue];
+			auto &queue_tx  = _queues[2];
 
-			if (&queue_use == &queue_tx) {
+			if (&queue_use.queue == &queue_tx.queue) {
 				if (!tx(queue_tx))
 					tx_drain(queue_tx);
 				return;
@@ -677,7 +679,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			if (queue != 0)
 				Logging::printf("unknown queue %u\n", queue);
 
-			bool inject = queue_use.consume([&] (auto const descriptor, auto) {
+			bool inject = queue_use.queue.consume([&] (auto const descriptor, auto) {
 				auto const request = vmm_address(descriptor.addr, descriptor.len);
 				auto const request_size = descriptor.len;
 
@@ -691,13 +693,13 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 				uintptr_t response = 0; size_t response_size = 0;
 				uintptr_t desc2 = 0; size_t desc2_size = 0;
 
-				auto desc1 = queue_use.next_desc(descriptor);
+				auto desc1 = queue_use.queue.next_desc(descriptor);
 				if (desc1.len) {
 					response      = vmm_address(desc1.addr, desc1.len);
 					response_size = desc1.len;
 				}
 
-				auto descx = queue_use.next_desc(desc1);
+				auto descx = queue_use.queue.next_desc(desc1);
 				if (descx.len) {
 					desc2      = vmm_address(descx.addr, descx.len);
 					desc2_size = descx.len;
@@ -738,7 +740,7 @@ class Virtio_sound: public StaticReceiver<Virtio_sound>, Virtio::Device
 			});
 
 			if (inject)
-				inject_irq();
+				inject_irq_via_queue(queue_use);
 		}
 
 		uint32 dev_feature     (unsigned)         override { return 0u; }
@@ -842,7 +844,7 @@ size_t Virtio_sound::_pcm_set_param(uintptr_t const in,  size_t const in_size,
 
 size_t Virtio_sound::_pcm_op(uintptr_t const in,  size_t const in_size,
                              uintptr_t const out, size_t const out_size,
-                             unsigned const type, Virtio::Queue &queue_tx)
+                             unsigned const type, Virtio::Device::Queue &queue_tx)
 {
 	auto const name = "virtio_sound, pcm op";
 
@@ -899,8 +901,8 @@ size_t Virtio_sound::_chmap_info(uintptr_t const in,  size_t const in_size,
 }
 
 PARAM_HANDLER(virtio_sound,
-	      "virtio_sound:mem,bdf - attach an virtio sound to the PCI bus",
-	      "Example: 'virtio_sound:0xe0600000,0x30' to attach on 00:06.0 on address",
+	      "virtio_sound:mem,bdf,msi,verbose - attach an virtio sound to the PCI bus",
+	      "Example: 'virtio_sound:0xe0600000,0x30,1,0' to attach on 00:06.0 on address",
 	      "If no bdf is given a free one is used.")
 {
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
@@ -911,18 +913,24 @@ PARAM_HANDLER(virtio_sound,
 	auto const irq_line = 13; /* defined by acpicontroller dsdt for INTD# */
 	auto const bar_base = argv[0];
 
+	bool const msix    = (argv[2] == ~0UL) ? true  : !!argv[2];
+	bool const verbose = (argv[3] == ~0UL) ? false : !!argv[3];
+
 	if (argv[0] == ~0UL)
 		Logging::panic("virtio_gpu: missing bar address");
 
-	Virtio_sound *dev = new Virtio_sound(mb.bus_irqlines, mb.bus_memregion,
-	                                     mb.bus_audio, *mb.clock(),
+	Virtio_sound *dev = new Virtio_sound(mb.bus_irqlines, mb.bus_mem,
+	                                     mb.bus_memregion, mb.bus_audio,
+	                                     *mb.clock(),
 	                                     bar_base, irq_pin, irq_line,
-	                                     uint16(bdf));
+	                                     uint16(bdf), msix, verbose);
 
 	mb.bus_pcicfg.add(dev, Virtio_sound::receive_static<MessagePciConfig>);
 	mb.bus_mem   .add(dev, Virtio_sound::receive_static<MessageMem>);
 	mb.bus_bios  .add(dev, Virtio_sound::receive_static<MessageBios>);
 	mb.bus_audio .add(dev, Virtio_sound::receive_static<MessageAudio>);
 
-	Logging::printf("virtio sound\n");
+	Logging::printf("%x:%x.%u virtio sound - %s\n",
+	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7,
+	                msix ? "MSIX" : "GSI");
 }

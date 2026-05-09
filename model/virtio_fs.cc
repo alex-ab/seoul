@@ -374,22 +374,26 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 	public:
 
 		Virtio_fs(DBus<MessageIrqLines>  &bus_irqlines,
+		          DBus<MessageMem>       &bus_mem,
 		          DBus<MessageMemRegion> &bus_memregion,
 		          DBus<MessageFs>        &bus_fs,
 		          uint64 const bar_addr,
 		          uint8  const irq_pin,
 		          uint8  const irq_line,
 		          uint16 const bdf,
-		          unsigned const fs_id)
+		          uint32 const fs_id,
+		          bool   const msix,
+		          bool   const verbose)
 		:
-			Virtio::Device(bus_irqlines, bus_memregion, irq_pin, irq_line, bdf,
+			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
+			               irq_pin, irq_line, bdf,
 			               26 /* virtio type */,
 			               0x01080001, /* pci class code (mass storage), sub class (other), prog if, rev. id */
 			               bar_addr,
-			               3 /* queues */),
+			               3 /* queues */, msix),
 			_bus_fs(bus_fs), _fs_id(fs_id)
 		{
-			_verbose = false;
+			_verbose = verbose;
 		}
 
 		bool receive(MessageFsCommit const &);
@@ -556,9 +560,9 @@ void Virtio_fs::notify(unsigned queue, bool more)
 		return;
 	}
 
-	auto &used_queue = _queues[queue].queue;
+	auto &used_queue = _queues[queue];
 
-	bool inject = used_queue.consume([&] (auto const &desc0, auto) {
+	bool inject = used_queue.queue.consume([&] (auto const &desc0, auto) {
 		auto const request      = vmm_address(desc0.addr, desc0.len);
 		auto const request_size = desc0.len;
 
@@ -575,10 +579,10 @@ void Virtio_fs::notify(unsigned queue, bool more)
 			return request_size;
 		}
 
-		auto desc1 = used_queue.next_desc(desc0);
-		auto desc2 = used_queue.next_desc(desc1);
-		auto desc3 = used_queue.next_desc(desc2);
-		auto desc4 = used_queue.next_desc(desc3);
+		auto desc1 = used_queue.queue.next_desc(desc0);
+		auto desc2 = used_queue.queue.next_desc(desc1);
+		auto desc3 = used_queue.queue.next_desc(desc2);
+		auto desc4 = used_queue.queue.next_desc(desc3);
 
 		auto const response = (in.opcode == FUSE_WRITE)   ? vmm_address(desc3.addr, desc3.len)
 		                    : (in.opcode == FUSE_DESTROY) ? vmm_address(desc1.addr, desc1.len)
@@ -588,7 +592,7 @@ void Virtio_fs::notify(unsigned queue, bool more)
 		                         : desc2.len;
 
 		if (desc4.len && (in.opcode != FUSE_WRITE && in.opcode != FUSE_READ)) {
-			auto desc5 = used_queue.next_desc(desc4);
+			auto desc5 = used_queue.queue.next_desc(desc4);
 			Logging::printf("opcode=%d next response desc2=%u desc3 %u desc4=%u ??? desc5=%u \n",
 			                in.opcode, desc2.len, desc3.len, desc4.len, desc5.len);
 		}
@@ -645,7 +649,7 @@ void Virtio_fs::notify(unsigned queue, bool more)
 	});
 
 	if (inject)
-		inject_irq();
+		inject_irq_via_queue(used_queue);
 }
 
 
@@ -1497,8 +1501,8 @@ bool Virtio_fs::receive(MessageFsCommit const &msg)
 
 
 PARAM_HANDLER(virtio_fs,
-	      "virtio_fs:mem,bdf - attach an virtio fs to the PCI bus",
-	      "Example: 'virtio_fs:0xe0200000'",
+	      "virtio_fs:mem,bdf,msix,verbose - attach an virtio fs to the PCI bus",
+	      "Example: 'virtio_fs:0xe0200000,1,0'",
 	      "If no bdf is given a free one is used.")
 {
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
@@ -1509,18 +1513,24 @@ PARAM_HANDLER(virtio_fs,
 	auto const irq_line = 11; /* defined by acpicontroller dsdt for INTC# */
 	auto const bar_base = argv[0];
 
+	bool const msix    = (argv[2] == ~0UL) ? true  : !!argv[2];
+	bool const verbose = (argv[3] == ~0UL) ? false : !!argv[3];
+
 	if (argv[0] == ~0UL)
 		Logging::panic("virtio_fs: missing bar address");
 
 	unsigned const fs_id = 1; /* XXX - allocator */
 
-	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_memregion, mb.bus_fs,
-	                         bar_base, irq_pin, irq_line, uint16(bdf), fs_id);
+	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_mem, mb.bus_memregion,
+	                         mb.bus_fs, bar_base, irq_pin, irq_line,
+	                         uint16(bdf), fs_id, msix, verbose);
 
 	mb.bus_pcicfg   .add(dev, Virtio_fs::receive_static<MessagePciConfig>);
 	mb.bus_mem      .add(dev, Virtio_fs::receive_static<MessageMem>);
 	mb.bus_bios     .add(dev, Virtio_fs::receive_static<MessageBios>);
 	mb.bus_fs_commit.add(dev, Virtio_fs::receive_static<MessageFsCommit>);
 
-	Logging::printf("Virtio Filesystem\n");
+	Logging::printf("%x:%x.%u virtio filesystem - %s\n",
+	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7,
+	                msix ? "MSIX" : "GSI");
 }
