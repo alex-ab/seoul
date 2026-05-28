@@ -646,9 +646,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			if (~mtd & msg.mtr_out)
-				Genode::error("mtd issue !? exit=", Genode::Hex(state.exit_reason),
-				              " ", Genode::Hex(mtd), "->", Genode::Hex(msg.mtr_out),
-				              " ", Genode::Hex(~mtd & msg.mtr_out));
+				Genode::warning("mtd issue !? exit=", Genode::Hex(state.exit_reason),
+				                " ", Genode::Hex(mtd), "->", Genode::Hex(msg.mtr_out),
+				                " ", Genode::Hex(~mtd & msg.mtr_out));
 
 			/* convert Seoul state to Genode VM state */
 			Seoul::write_vcpu_state(_seoul_state, msg.mtr_out, state);
@@ -756,6 +756,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			show_host_cpu_info();
 
 			_started.down();
+
+			/* some base-* platform don't adhere to the protocol :-( */
+			Seoul::startup_workaround(state);
 
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_CHECK_IRQ);
 			state.ctrl_primary  .charge(_rdtsc_exit ? (1u << 14) : 0);
@@ -885,6 +888,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			show_host_cpu_info();
 
 			_started.down();
+
+			/* some base-* platform don't adhere to the protocol :-( */
+			Seoul::startup_workaround(state);
 
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_HLT);
 			state.ctrl_primary.charge(_rdtsc_exit ? (1U << 12) : 0);
