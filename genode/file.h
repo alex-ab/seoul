@@ -137,7 +137,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 		Genode::Mutex            mutex { };
 
-		unsigned const           fs_id { 1 }; /* change if multiple instantiated */
+		unsigned const           fs_id;
 
 		unsigned const           root_nodeid { 1 }; /* XXX ever the case ? */
 
@@ -440,7 +440,8 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 	public:
 
-		Filesystem(Env &env, Motherboard &mb) : mb(mb), env(env)
+		Filesystem(Env &env, Motherboard &mb, unsigned fsid)
+		: mb(mb), env(env), fs_id(fsid)
 		{
 			if (root.value != 0) {
 				error("Filesystem offline - unexpected state");
