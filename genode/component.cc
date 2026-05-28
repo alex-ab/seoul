@@ -759,6 +759,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 
 			_started.down();
 
+			/* some base-* platform don't adhere to the protocol :-( */
+			Seoul::startup_workaround(state);
+
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_CHECK_IRQ);
 			state.ctrl_primary  .charge(_rdtsc_exit ? (1u << 14) : 0);
 			state.ctrl_secondary.charge((1u << 13) /* XSETBV */);
@@ -887,6 +890,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			show_host_cpu_info();
 
 			_started.down();
+
+			/* some base-* platform don't adhere to the protocol :-( */
+			Seoul::startup_workaround(state);
 
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_HLT);
 			state.ctrl_primary.charge(_rdtsc_exit ? (1U << 12) : 0);

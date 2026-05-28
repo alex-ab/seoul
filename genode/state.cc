@@ -689,3 +689,26 @@ void Seoul::dump(unsigned mtr, Genode::Vcpu_state const &state, CpuState const &
 	if (mtr)
 		error("unknown state to dump ", Hex(mtr));
 }
+
+
+void Seoul::startup_workaround(Genode::Vcpu_state &state)
+{
+	using namespace Genode;
+
+	bool apply_workaround = !state.intr_state.charged() ||
+	                        !state.actv_state.charged() ||
+	                        !state.inj_info  .charged() ||
+	                        !state.inj_error .charged() ||
+	                        !state.flags     .charged();
+
+	if (!apply_workaround)
+		return;
+
+	warning("initial startup state empty?! - apply workaround");
+
+	state.intr_state.charge(state.intr_state.value());
+	state.actv_state.charge(state.actv_state.value());
+	state.inj_info  .charge(state.inj_info  .value());
+	state.inj_error .charge(state.inj_error .value());
+	state.flags     .charge(state.flags     .value());
+}
