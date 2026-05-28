@@ -26,6 +26,7 @@ CC_OPT_FREESTANDING ?= -ffreestanding
 
 CCFLAGS += $(CC_OPT_FREESTANDING)
 CCFLAGS += -Wno-unused
+CCFLAGS += -Wformat
 CCFLAGS += -m64 -mcmodel=large -march=x86-64-v2
 
 symbol_name = _binary_$(subst -,_,$(subst .,_,$(subst binary_,,$(subst .o,,$(notdir $@)))))
