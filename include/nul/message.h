@@ -521,6 +521,7 @@ struct MessageHostOp
       OP_MIGRATION_RETRIEVE_INIT,
       OP_MIGRATION_START,
       OP_VM_OFF,
+      OP_FS_OPEN,
     } type;
   union {
     unsigned long value;

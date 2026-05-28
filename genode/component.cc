@@ -1391,6 +1391,16 @@ class Machine : public StaticReceiver<Machine>
 
 				return true;
 			}
+			case MessageHostOp::OP_FS_OPEN:
+			{
+				/* casted later to unsigned */
+				if (msg.value >= 1ull << 32)
+					return false;
+
+				new (_vmm.heap) Seoul::Filesystem(_vmm.env, _motherboard,
+				                                  unsigned(msg.value));
+				return true;
+			}
 			default:
 
 				Logging::printf("HostOp %d not implemented\n", msg.type);
@@ -1616,9 +1626,15 @@ class Machine : public StaticReceiver<Machine>
 
 				for (int i = 0; dmi->arg_names[i] && (i < MAX_ARGS); i++) {
 					if (node.has_attribute(dmi->arg_names[i])) {
-						argv[i] = node.attribute_value(dmi->arg_names[i], ~0UL);
+						if (dmi->arg_names[i] == "tag") {
+							auto tag = node.attribute_value(dmi->arg_names[i], String<sizeof(unsigned long)>());
+
+							argv[i] = *(unsigned long *)tag.string();
+						} else
+							argv[i] = node.attribute_value(dmi->arg_names[i], ~0UL);
+
 						if (verbose)
-							Genode::log(" arg[", i, "]: ", Genode::Hex(argv[i]));
+							Genode::log(" - ", name, " ", dmi->arg_names[i], " - arg[", i, "]: ", Genode::Hex(argv[i]));
 					}
 				}
 
@@ -1886,12 +1902,6 @@ void Component::construct(Genode::Env &env)
 	                         guest_memory.backing_store_local_base(),
 	                         guest_memory.backing_store_size(),
 	                         vmm.config.node());
-
-	vmm.config.node().with_optional_sub_node("machine", [&] (auto const &node) {
-		node.with_optional_sub_node("virtio_fs", [&](auto const &) {
-			static Seoul::Filesystem files(env, machine.motherboard());
-		});
-	});
 
 	vmm.config.node().with_sub_node("machine",
 		[&] (auto const &sub_node) { machine.setup_devices(vmm.config.node(), sub_node); },

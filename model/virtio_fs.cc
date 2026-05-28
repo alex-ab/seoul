@@ -332,10 +332,15 @@ struct Virtio_fs_config
 {
 	bool use_notify_queue { };
 
+	char tag[36] { };
+
+	void reset()
+	{
+		use_notify_queue = false;
+	}
+
 	unsigned read(unsigned const off) const
 	{
-		char const tag[36] = "mytag";
-
 		auto const word = off / 4;
 
 		switch (word) {
@@ -362,8 +367,8 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 
 		DBus<MessageFs> &_bus_fs;
 
-		unsigned const _fs_id;
-//		unsigned    const  _device { 0x10002 };
+		unsigned const   _fs_id;
+
 		Seoul::Lock      _lock      { };
 		Virtio_fs_config _fs_config { };
 
@@ -383,7 +388,9 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		          uint16 const bdf,
 		          uint32 const fs_id,
 		          bool   const msix,
-		          bool   const verbose)
+		          bool   const verbose,
+		          char const * tag,
+		          uint32 const tag_len)
 		:
 			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
 			               irq_pin, irq_line, bdf,
@@ -394,6 +401,9 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 			_bus_fs(bus_fs), _fs_id(fs_id)
 		{
 			_verbose = verbose;
+
+			auto len = sizeof(_fs_config.tag) < tag_len ? : tag_len;
+			memcpy(_fs_config.tag, tag, len);
 		}
 
 		bool receive(MessageFsCommit const &);
@@ -405,7 +415,7 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 
 				Seoul::Lock::Guard guard(_lock);
 
-				_fs_config = { };
+				_fs_config.reset();
 				reset();
 			};
 
@@ -477,7 +487,7 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 			if ((value & 3) != 0)
 				return;
 
-			_fs_config = { };
+			_fs_config.reset();
 			reset();
 #endif
 		}
@@ -1501,10 +1511,21 @@ bool Virtio_fs::receive(MessageFsCommit const &msg)
 
 
 PARAM_HANDLER(virtio_fs,
-	      "virtio_fs:mem,bdf,msix,verbose - attach an virtio fs to the PCI bus",
-	      "Example: 'virtio_fs:0xe0200000,1,0'",
-	      "If no bdf is given a free one is used.")
+	      "virtio_fs:mem,bdf,msix,verbose,tag - attach an virtio fs to the PCI bus",
+	      "Example: 'virtio_fs:0xe0200000,1,0,fs42'",
+	      "If no bdf is given a free one is used. tag size is at most 7 byte")
 {
+	if (argv[0] == ~0UL)
+		Logging::panic("virtio_fs: missing bar address");
+	if (argv[4] == ~0UL || argv[4] == 0)
+		Logging::panic("virtio_fs: missing tag name");
+
+	static unsigned fs_id = 1;
+
+	MessageHostOp msg(MessageHostOp::OP_FS_OPEN, fs_id);
+	if (!mb.bus_hostop.send(msg))
+		Logging::panic("could not open file service\n");
+
 	unsigned const bdf = PciHelper::find_free_bdf(mb.bus_pcicfg, unsigned(argv[1]));
 	if (bdf >= 1u << 16)
 		Logging::panic("virtio_fs: invalid bdf\n");
@@ -1516,21 +1537,21 @@ PARAM_HANDLER(virtio_fs,
 	bool const msix    = (argv[2] == ~0UL) ? true  : !!argv[2];
 	bool const verbose = (argv[3] == ~0UL) ? false : !!argv[3];
 
-	if (argv[0] == ~0UL)
-		Logging::panic("virtio_fs: missing bar address");
-
-	unsigned const fs_id = 1; /* XXX - allocator */
+	char const *tag = reinterpret_cast<char const *>(&(argv[4]));
 
 	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_mem, mb.bus_memregion,
 	                         mb.bus_fs, bar_base, irq_pin, irq_line,
-	                         uint16(bdf), fs_id, msix, verbose);
+	                         uint16(bdf), fs_id, msix, verbose,
+	                         tag, sizeof(unsigned long));
 
 	mb.bus_pcicfg   .add(dev, Virtio_fs::receive_static<MessagePciConfig>);
 	mb.bus_mem      .add(dev, Virtio_fs::receive_static<MessageMem>);
 	mb.bus_bios     .add(dev, Virtio_fs::receive_static<MessageBios>);
 	mb.bus_fs_commit.add(dev, Virtio_fs::receive_static<MessageFsCommit>);
 
-	Logging::printf("%x:%x.%u virtio filesystem - %s\n",
-	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7,
+	Logging::printf("%x:%x.%u virtio filesystem, tag '%s' - %s\n",
+	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7, tag,
 	                msix ? "MSIX" : "GSI");
+
+	fs_id ++;
 }
