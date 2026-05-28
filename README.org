@@ -6,10 +6,10 @@ that is included in [[https://github.com/TUD-OS/NUL][NUL]] and was developed
 mainly by Bernhard Kauer. The combination of NOVA and Vancouver (later
 Seoul) is described in the following paper by Udo Steinberg and Bernhard Kauer:
 
-[http://os.inf.tu-dresden.de/papers_ps/steinberg_eurosys2010.pdf - NOVA: A Microhypervisor-Based Secure Virtualization Architecture].
+[[http://os.inf.tu-dresden.de/papers_ps/steinberg_eurosys2010.pdf][NOVA: A Microhypervisor-Based Secure Virtualization Architecture]]
 
-NUL and the Vancouver project is discontinued. Even so Seoul was originally
-developed solely to run with the NOVA hypervisor, nowadays it is
+NUL and the Vancouver project is discontinued. Even so Seoul has beend
+developed originally solely to run with the NOVA hypervisor, nowadays it is
 also available for seL4 and Fiasco.OC on Genode.
 
 This fork of [[https://github.com/TUD-OS/seoul][Seoul]] is an adjusted version
@@ -20,10 +20,10 @@ Ready to use Seoul packets for Sculpt OS are available via
 Note: the other bindings for NUL and NRE of this repository are not maintained
 nor runnable.
 
-Seoul gets mainly maintained and extended by
-[[https://github.com/alex-ab][me]] on a casual base as time permits.
+Seoul gets maintained and extended mainly by
+[[https://github.com/alex-ab][me]] on a casual base - as time permits.
 This repository is referenced as external port via Genode GOA SDK in
-[[https://github.com/genodelabs/genode-world][genode-world]] and for
+[[https://codeberg.org/genodelabs/genode-world][genode-world]] and for
 developer purposes via my [[https://github.com/alex-ab/genode-chest][chest]]
 repository.
 
@@ -39,7 +39,7 @@ on [[https://www.genodians.org][genodians.org]] updates.
 
 To use it, you first need to obtain a clone of Genode:
 
-! git clone https://github.com/genodelabs/genode.git genode
+! git clone https://codeberg.org/genodelabs/genode.git genode
 
 Please follow the instruction of the Genode OS framework to get ready.
  
