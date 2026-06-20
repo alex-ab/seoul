@@ -151,9 +151,12 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 		void _handle_ack();
 		void _handle_packet_stream();
 
+		void _forget    (MessageFs const &);
 		void _destroy   (MessageFs const &);
 		void _create    (MessageFs &);
 		void _rename    (MessageFs &);
+		void _sym_link  (MessageFs &);
+		void _read_link (MessageFs &);
 		void _lookup    (MessageFs &);
 		void _sync      (MessageFs &);
 		void _unlink    (MessageFs &);
@@ -169,7 +172,9 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 		void _remove_dir(MessageFs &);
 		void _close_dir (MessageFs &);
 
-		void _handle_read_file(Packet &);
+		void _lookup_sym(MessageFs &, Dir_handle, char const *, size_t,
+		                 unsigned long sym_handle = 0ul);
+
 		bool _handle_read_dir (Packet &);
 
 		enum { MAX_PACKETS = 64 };
@@ -184,6 +189,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			unsigned missing;
 		} _pending { };
 
+		Constructible<MessageFsCommit> _read_link_pending { };
 		Constructible<MessageFsCommit> _read_file_pending { };
 		Constructible<MessageFsCommit> _read_dir_pending  { };
 		Constructible<MessageFsCommit> _sync_pending      { };
@@ -191,7 +197,8 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 		bool _queued_sync      { };
 		bool _queued_file_read { };
-		bool _queued_write    { };
+		bool _queued_link_read { };
+		bool _queued_write     { };
 
 		bool with_new_packet(auto const &fn)
 		{
@@ -428,6 +435,71 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			::memcpy(reinterpret_cast<void *>(msg.buffer.start),
 			         reinterpret_cast<void *>(tx.packet_content(packet)),
 			         msg.buffer.size);
+		}
+
+		bool _handle_async_read(Packet &packet, auto &check)
+		{
+			return with_packet(packet, [&](auto) {
+
+				if (!packet.succeeded() || !check.constructed()) {
+					error(" File::_handle_async_read failure");
+					return false;
+				}
+
+				auto &msg = check->fs_delayed;
+
+				_copy_data(msg, packet);
+
+				mutex.release();
+
+				mb.bus_fs_commit.send(*check);
+
+				mutex.acquire();
+
+				return true;
+			});
+		}
+
+		void _read_async(MessageFs &msg, auto &active, auto &obj)
+		{
+			if (active && obj.constructed()) {
+				/*
+				 * mb.bus_fs_commit.send(*check)
+				 * passes here. Commit finish current read of file.
+				 */
+				msg.buffer = obj->fs_delayed.buffer;
+
+				obj.destruct();
+				active = false;
+				return;
+			}
+
+			with_file(msg.nodeid, [&](auto &file) {
+				active = _queue_read(file.handle, msg.buffer.size, msg.buffer.offset);
+
+				obj.construct(fs_id, msg.nodeid, msg);
+
+				if (!active) {
+					msg.buffer.offset = 0; /* read delayed - info for model */
+					return;
+				}
+
+				tx.wakeup();
+
+				bool early = _try_early_ack_and_release(Packet::READ, [&](auto &pkg) {
+
+					_copy_data(msg, pkg);
+					obj.destruct();
+					active = false;
+					return true;
+				});
+
+				if (!early)
+					msg.buffer.offset = 0; /* read delayed - info for model */
+			}, [&]() {
+				error(" File::_read_async: unknown nodeid ", msg.nodeid);
+				msg.fail();
+			});
 		}
 
 		void _add_root()

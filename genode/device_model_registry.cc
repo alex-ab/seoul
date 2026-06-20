@@ -87,7 +87,7 @@ MODEL_INFO(rtl8029, "bdf", "irq", "port")
 MODEL_INFO(virtio_input, "mem", "bdf", "resolution_x", "resolution_y", "msix", "verbose")
 MODEL_INFO(virtio_gpu,   "mem", "bdf", "msix", "verbose")
 MODEL_INFO(virtio_sound, "mem", "bdf", "msix", "verbose")
-MODEL_INFO(virtio_fs,    "mem", "bdf", "msix", "verbose", "tag")
+MODEL_INFO(virtio_fs,    "mem", "bdf", "msix", "verbose", "tag", "uid", "gid")
 MODEL_INFO(virtio_net,   "mem", "bdf", "msix", "verbose")
 
 MODEL_INFO(xhci, "mem")

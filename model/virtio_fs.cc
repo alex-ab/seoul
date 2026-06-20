@@ -82,8 +82,8 @@ enum fuse_opcode
 	FUSE_FORGET          =  2,
 	FUSE_GETATTR         =  3,
 	FUSE_SETATTR         =  4,
-//	FUSE_READLINK        =  5,
-//	FUSE_SYMLINK         =  6,
+	FUSE_READLINK        =  5,
+	FUSE_SYMLINK         =  6,
 //	FUSE_MKNOD           =  8,
 	FUSE_MKDIR           =  9,
 	FUSE_UNLINK          = 10,
@@ -344,7 +344,7 @@ struct Virtio_fs_config
 		auto const word = off / 4;
 
 		switch (word) {
-		case 0 ... 36 / 4 - 1: /* tag name */ /* XXX garbage behind tag */
+		case 0 ... 36 / 4 - 1: /* tag name */
 			return *(unsigned *)(tag + word * 4);
 		case 36 / 4:
 			return  1u; /* number of queues */
@@ -372,7 +372,10 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		Seoul::Lock      _lock      { };
 		Virtio_fs_config _fs_config { };
 
-		unsigned const _blk_size = 512; /* XXX */
+		uint32 const _uid;
+		uint32 const _gid;
+
+		static constexpr uint32 _blk_size = 512; /* XXX */
 
 		~Virtio_fs();
 
@@ -390,7 +393,9 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		          bool   const msix,
 		          bool   const verbose,
 		          char const * tag,
-		          uint32 const tag_len)
+		          uint32 const tag_len,
+		          uint32 const uid,
+		          uint32 const gid)
 		:
 			Virtio::Device(bus_irqlines, bus_mem, bus_memregion,
 			               irq_pin, irq_line, bdf,
@@ -398,7 +403,7 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 			               0x01080001, /* pci class code (mass storage), sub class (other), prog if, rev. id */
 			               bar_addr,
 			               3 /* queues */, msix),
-			_bus_fs(bus_fs), _fs_id(fs_id)
+			_bus_fs(bus_fs), _fs_id(fs_id), _uid(uid), _gid(gid)
 		{
 			_verbose = verbose;
 
@@ -501,6 +506,8 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		unsigned fuse_op_getxattr(Desc const &, Desc &, uint64, int32 &);
 		unsigned fuse_op_create  (int32 &, Desc const &, Desc &, uint64, unsigned);
 		unsigned fuse_op_mkdir   (int32 &, Desc const &, Desc &, uint64, unsigned);
+		unsigned fuse_op_symlink (int32 &, Desc const &, Desc &, uint64, unsigned, bool &);
+		unsigned fuse_op_readlink(int32 &, Desc const &, Desc &, uint64, unsigned, bool &);
 		unsigned fuse_op_rename  (int32 &, Desc const &, uint64, unsigned);
 		unsigned fuse_op_flush   (Desc const &, uint64, unsigned, bool &);
 		unsigned fuse_op_syncfs  (Desc const &, uint64, unsigned, bool &);
@@ -534,15 +541,20 @@ void Virtio_fs::populate(MessageFs const &msg, uint64 const ino,
 	uint32 atimensec;
 	uint32 ctimensec;
 #endif
-	uint32 const rwx = (msg.readable   ? 1 : 0) |
-	                   (msg.writeable  ? 2 : 0) |
-	                   (msg.executable ? 4 : 0);
+	uint32 const rwx = (msg.readable   ? 4u : 0) |
+	                   (msg.writeable  ? 2u : 0) |
+	                   (msg.executable ? 1u : 0);
 
-	attr.mode = msg.status_file_type() | rwx;
+	attr.mode = msg.status_file_type()
+	          | (rwx << 6)   /* user  */
+	          | (rwx << 3);  /* group */
+
 #if 0
 	uint32 nlink;
-	uint32 uid;
-	uint32 gid;
+#endif
+	attr.uid = _uid;
+	attr.gid = _gid;
+#if 0
 	uint32 rdev;
 #endif
 	attr.blksize = _blk_size;
@@ -585,7 +597,8 @@ void Virtio_fs::notify(unsigned queue, bool more)
 		auto const  unique = in.unique;
 
 		if (in.opcode == FUSE_FORGET) {
-			Logging::printf("FUSE_FORGET ? nodeid=%llu\n", in.nodeid);
+			MessageFs msg(MessageFs::FORGET, _fs_id, in.nodeid);
+			_bus_fs.send(msg);
 			return request_size;
 		}
 
@@ -594,11 +607,13 @@ void Virtio_fs::notify(unsigned queue, bool more)
 		auto desc3 = used_queue.queue.next_desc(desc2);
 		auto desc4 = used_queue.queue.next_desc(desc3);
 
-		auto const response = (in.opcode == FUSE_WRITE)   ? vmm_address(desc3.addr, desc3.len)
-		                    : (in.opcode == FUSE_DESTROY) ? vmm_address(desc1.addr, desc1.len)
+		auto const response = (in.opcode == FUSE_WRITE)    ? vmm_address(desc3.addr, desc3.len)
+		                    : (in.opcode == FUSE_DESTROY)  ? vmm_address(desc1.addr, desc1.len)
+		                    : (in.opcode == FUSE_READLINK) ? vmm_address(desc1.addr, desc1.len)
 		                    : vmm_address(desc2.addr, desc2.len);
-		auto const response_size = (in.opcode == FUSE_WRITE)   ? desc3.len
-		                         : (in.opcode == FUSE_DESTROY) ? desc1.len
+		auto const response_size = (in.opcode == FUSE_WRITE)    ? desc3.len
+		                         : (in.opcode == FUSE_DESTROY)  ? desc1.len
+		                         : (in.opcode == FUSE_READLINK) ? desc1.len
 		                         : desc2.len;
 
 		if (desc4.len && (in.opcode != FUSE_WRITE && in.opcode != FUSE_READ)) {
@@ -633,6 +648,8 @@ void Virtio_fs::notify(unsigned queue, bool more)
 		case FUSE_GETATTR : res = fuse_op_getattr (err, desc1, desc3, in.nodeid, queue); break;
 		case FUSE_SETATTR : res = fuse_op_setattr (err, desc1, desc3, in.nodeid, queue); break;
 		case FUSE_LOOKUP  : res = fuse_op_lookup  (err, desc1, desc3, in.nodeid, queue); break;
+		case FUSE_SYMLINK : res = fuse_op_symlink (err, desc1, desc3, in.nodeid, queue, delay); break;
+		case FUSE_READLINK: res = fuse_op_readlink(err, desc1, desc2, in.nodeid, queue, delay); break;
 		case FUSE_READ    : res = fuse_op_read    (err, desc1, desc3, in.nodeid, queue, delay); break;
 		case FUSE_WRITE   : res = fuse_op_write   (err, desc1, desc2, in.nodeid, queue, desc4, delay); break;
 		case FUSE_OPEN    :
@@ -688,7 +705,7 @@ unsigned Virtio_fs::fuse_op_init(Desc const &in, Desc &out, uint64 const nodeid)
 	init_out.minor         = init_in.minor;
 	init_out.flags         = 0;
 	init_out.max_readahead = init_in.max_readahead;
-	init_out.max_write     = 8192; /* XXX choose */
+	init_out.max_write     = 4 * 4096;
 
 	Logging::printf("%s nodeid=%llx - %u.%u flags=%x->%x "
 	                "readahead=%u max_write=%u\n", __func__,
@@ -779,6 +796,93 @@ unsigned Virtio_fs::fuse_op_mkdir(int32 &err, Desc const &in, Desc &out,
 	populate(msg, msg.nodeid, entry_out.attr);
 
 	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_symlink(int32 &err, Desc const &in, Desc &out,
+                                    uint64 const nodeid, unsigned const queue,
+                                    bool &delay)
+{
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	if (!in_addr || !out_addr || out_size < sizeof(fuse_entry_out))
+		return 0u;
+
+	auto &entry_out = *reinterpret_cast<fuse_entry_out *>(out_addr);
+
+	MessageFs msg(MessageFs::SYMLINK, _fs_id, nodeid, queue,
+	              S_IFDIR, S_IFLNK, S_IFREG);
+
+	msg.buffer.start  = in_addr;
+	msg.buffer.size   = in_size;
+	msg.buffer.offset = 0;
+
+	if (!_bus_fs.send(msg) || !msg.ok()) {
+		err = -FUSE_LX_ENOENT;
+		return 0u;
+	}
+
+	if (msg.buffer.offset == 0) {
+		delay = true;
+		return 0u;
+	}
+
+	entry_out = { };
+
+	entry_out.nodeid      = msg.nodeid;
+	entry_out.generation  = 0; /* XXX ? */
+	entry_out.entry_valid = 10; /* 10s */
+	entry_out.attr_valid  = 10; /* 10s */
+	entry_out.entry_valid_nsec = 0; /* + 0ns */
+	entry_out.attr_valid_nsec  = 0; /* + 0ns */
+
+	populate(msg, msg.nodeid, entry_out.attr);
+
+	return out_size;
+}
+
+
+unsigned Virtio_fs::fuse_op_readlink(int32 &err, Desc const &in, Desc &out,
+                                     uint64 const nodeid, unsigned const queue,
+                                     bool &delay)
+{
+	if (!in.len || !out.len)
+		return 0u;
+
+	auto const in_addr = vmm_address(in.addr, in.len);
+	auto const in_size = in.len;
+
+	auto const out_addr = vmm_address(out.addr, out.len);
+	auto const out_size = out.len;
+
+	if (!in_addr || !out_addr)
+		return 0u;
+
+	MessageFs msg(MessageFs::READLINK, _fs_id, nodeid, queue,
+	              S_IFDIR, S_IFLNK, S_IFREG);
+
+	msg.buffer.start  = out_addr;
+	msg.buffer.offset = 0;
+	msg.buffer.size   = out_size;
+
+	if (!_bus_fs.send(msg) || !msg.ok()) {
+		err = -FUSE_LX_ENOENT;
+		return 0u;
+	}
+
+	if (msg.buffer.offset == 0) {
+		delay = true;
+		return 0u;
+	}
+
+	return unsigned(msg.buffer.size);
 }
 
 
@@ -939,12 +1043,9 @@ unsigned Virtio_fs::fuse_op_syncfs(Desc     const &in   , uint64 const  nodeid,
 		return 0u;
 
 	if (msg.buffer.offset == 0) {
-		Logging::printf("%s delayed\n", __func__);
 		delay = true;
 		return 0u;
 	}
-
-	Logging::printf("%s done\n", __func__);
 
 	return 0u;
 }
@@ -1253,7 +1354,7 @@ unsigned Virtio_fs::fuse_op_setattr(int32 &err, Desc const &in, Desc &out,
 	auto const &attr_in  = *reinterpret_cast<fuse_setattr_in *>(in_addr);
 	auto       &attr_out = *reinterpret_cast<fuse_attr_out   *>(out_addr);
 
-//	if (_verbose)
+	if (_verbose)
 		Logging::printf("%s: nodeid=%llx fh=%llu valid=%x size=%llx\n",
 		                __func__,
 		                nodeid, attr_in.fh, attr_in.valid, attr_in.size);
@@ -1511,8 +1612,8 @@ bool Virtio_fs::receive(MessageFsCommit const &msg)
 
 
 PARAM_HANDLER(virtio_fs,
-	      "virtio_fs:mem,bdf,msix,verbose,tag - attach an virtio fs to the PCI bus",
-	      "Example: 'virtio_fs:0xe0200000,1,0,fs42'",
+	      "virtio_fs:mem,bdf,msix,verbose,tag,uid,gid - attach an virtio fs to the PCI bus",
+	      "Example: 'virtio_fs:0xe0200000,1,0,fs42,1000,1000'",
 	      "If no bdf is given a free one is used. tag size is at most 7 byte")
 {
 	if (argv[0] == ~0UL)
@@ -1537,21 +1638,24 @@ PARAM_HANDLER(virtio_fs,
 	bool const msix    = (argv[2] == ~0UL) ? true  : !!argv[2];
 	bool const verbose = (argv[3] == ~0UL) ? false : !!argv[3];
 
-	char const *tag = reinterpret_cast<char const *>(&(argv[4]));
+	char const *tag    = reinterpret_cast<char const *>(&(argv[4]));
+
+	auto const uid     = (argv[5] == ~0UL) ? 1000u : uint32(argv[5]);
+	auto const gid     = (argv[6] == ~0UL) ? 1000u : uint32(argv[6]);
 
 	auto dev = new Virtio_fs(mb.bus_irqlines, mb.bus_mem, mb.bus_memregion,
 	                         mb.bus_fs, bar_base, irq_pin, irq_line,
 	                         uint16(bdf), fs_id, msix, verbose,
-	                         tag, sizeof(unsigned long));
+	                         tag, sizeof(unsigned long), uid, gid);
 
 	mb.bus_pcicfg   .add(dev, Virtio_fs::receive_static<MessagePciConfig>);
 	mb.bus_mem      .add(dev, Virtio_fs::receive_static<MessageMem>);
 	mb.bus_bios     .add(dev, Virtio_fs::receive_static<MessageBios>);
 	mb.bus_fs_commit.add(dev, Virtio_fs::receive_static<MessageFsCommit>);
 
-	Logging::printf("%x:%x.%u virtio filesystem, tag '%s' - %s\n",
+	Logging::printf("%x:%x.%u virtio filesystem, tag '%s', uid=%u, gid=%u - %s\n",
 	                (bdf >> 8) & 0xff, (bdf >> 3) & 0x1f, bdf & 0x7, tag,
-	                msix ? "MSIX" : "GSI");
+	                uid, gid, msix ? "MSIX" : "GSI");
 
 	fs_id ++;
 }
