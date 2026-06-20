@@ -124,44 +124,7 @@ void Seoul::Filesystem::_read_file(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	if (_queued_file_read && _read_file_pending.constructed()) {
-		/*
-		 * mb.bus_fs_commit.send(*_read_file_pending)
-		 * passes here. Commit finish current read of file.
-		 */
-		msg.buffer = _read_file_pending->fs_delayed.buffer;
-
-		_read_file_pending.destruct();
-		_queued_file_read = false;
-		return;
-	}
-
-	with_file(msg.nodeid, [&](auto &file) {
-		_queued_file_read = _queue_read(file.handle, msg.buffer.size, msg.buffer.offset);
-
-		_read_file_pending.construct(fs_id, msg.nodeid, msg);
-
-		if (!_queued_file_read) {
-			msg.buffer.offset = 0; /* read delayed - info for model */
-			return;
-		}
-
-		tx.wakeup();
-
-		bool early = _try_early_ack_and_release(Packet::READ, [&](auto &pkg) {
-
-			_copy_data(msg, pkg);
-			_read_file_pending.destruct();
-			_queued_file_read = false;
-			return true;
-		});
-
-		if (!early)
-			msg.buffer.offset = 0; /* read delayed - info for model */
-	}, [&]() {
-		error(" File::_read_file: unknown nodeid ", msg.nodeid);
-		msg.fail();
-	});
+	_read_async(msg, _queued_file_read, _read_file_pending);
 }
 
 
@@ -342,6 +305,74 @@ void Seoul::Filesystem::_rename(MessageFs &msg)
 	if (!msg.ok())
 		error(" File::_rename failed: ", dir_nodeid_src, "->", dir_nodeid_dst,
 		      "'", src, "' -> '", dst, "'");
+}
+
+
+void Seoul::Filesystem::_read_link(MessageFs &msg)
+{
+	Genode::Mutex::Guard guard(mutex);
+
+	_read_async(msg, _queued_link_read, _read_link_pending);
+}
+
+
+void Seoul::Filesystem::_sym_link(MessageFs &msg)
+{
+	bool verbose = true;
+
+	String_dir dst(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
+	String_dir src(Cstring(reinterpret_cast<char *>(msg.buffer.start + dst.length()), msg.buffer.size - dst.length()));
+
+	auto const dir_nodeid_dst = msg.nodeid;
+
+	bool create = true;
+
+	Genode::Mutex::Guard guard(mutex);
+
+	if (_queued_write && _write_pending.constructed()) {
+		_write_pending.destruct();
+		_queued_write = false;
+		/* re-try failed queued beforehand */
+		create = false;
+	}
+
+	with_dir(dir_nodeid_dst, [&](auto &dir_dst) {
+
+		try {
+			auto const handle = fs.symlink(dir_dst.handle, dst.string(), create);
+
+			File_handle fh { handle.value };
+			bool ok = _queue_write(fh, uintptr_t(src.string()), src.length(), 0);
+
+			if (!ok) {
+				_queued_write = true;
+				_write_pending.construct(fs_id, msg.nodeid, msg);
+				msg.buffer.offset = 0; /* delayed */
+				fs.close(fh);
+			} else {
+				/* sets msg.buffer.set to done by invoking add_status */
+				_lookup_sym(msg, dir_dst.handle, dst.string(), dst.length(), fh.value);
+
+				auto entry = new (heap) Avl_file(msg.nodeid);
+				entry->with_file([&](auto &file) {
+					file.handle     = fh;
+					file.name       = dst.string();
+					file.dir_nodeid = dir_nodeid_dst;
+				});
+
+				_files.insert(entry);
+			}
+
+			tx.wakeup();
+
+		} catch (...) {
+			msg.fail();
+			error(" File::_sym_link: failed - exception");
+		}
+	}, [&] {
+		error(" File::_sym_link: unknown dir id ", dir_nodeid_dst);
+		msg.fail();
+	});
 }
 
 
@@ -583,11 +614,45 @@ void Seoul::Filesystem::_unlink(MessageFs &msg)
 }
 
 
+void Seoul::Filesystem::_lookup_sym(MessageFs           &msg,
+                                    Dir_handle    const  parent,
+                                    char          const *path,
+                                    size_t        const  path_len,
+                                    unsigned long const  sym)
+{
+	try {
+		auto const h  = sym ? Symlink_handle(sym)
+		              : fs.symlink(parent, { path, path_len }, false);
+		Status status = fs.status(h);
+
+		msg.nodeid = status.inode;
+		msg.add_status(status.inode, status.size,
+		               status.modification_time.ms_since_1970,
+		               status.directory(), status.symlink());
+
+		msg.writeable  = status.rwx.writeable;
+		msg.readable   = status.rwx.readable;
+		msg.executable = status.rwx.executable;
+
+		if (!sym)
+			fs.close(h);
+
+		return;
+	} catch (File_system::Lookup_failed) {
+		msg.fail();
+	} catch (...) {
+		msg.fail();
+	}
+
+	msg.fail();
+}
+
+
 void Seoul::Filesystem::_lookup(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	auto * path = reinterpret_cast<char const *>(msg.buffer.start);
+	Cstring cpath (reinterpret_cast<char const *>(msg.buffer.start), msg.buffer.size);
 
 	bool verbose = false;
 
@@ -595,30 +660,37 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 
 		try {
 			if (verbose)
-				log(" File::_lookup A parent inode=", msg.nodeid,
-				    " fh=", parent_dir.handle.value, " path='", path, "'");
+				log(" File::_lookup:", __LINE__, " parent inode=", msg.nodeid,
+				    " fh=", parent_dir.handle.value, " path='", cpath, "'");
 
 			with_open_dir(msg, parent_dir, [&]() {
 
 				Dir_handle parent = parent_dir.handle;
 
 				if (verbose)
-					log(" File::_lookup B parent inode=", msg.nodeid,
-					    " fh=", parent.value, " path='", path, "'");
+					log(" File::_lookup:", __LINE__, " parent inode=", msg.nodeid,
+					    " fh=", parent.value, " path='", cpath, "'");
 
-				/* STAT_ONLY leads to already_open exception for files XXX */
-				File_handle h = fs.file(parent, path, READ_ONLY, false);
+				/*
+				 * STAT_ONLY leads to already_open exception for files - wtf
+				 * symlink will cause an exception - wtf
+				 * -> re-try by _lookup_sym
+				 */
+				File_handle h = fs.file(parent, { reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size },
+				                        READ_ONLY, false);
 
 				Status status = fs.status(h);
 
 				if (verbose)
-					log(" File::_lookup C -> inode=", status.inode,
+					log(" File::_lookup:", __LINE__, " -> inode=", status.inode,
 					    " size=", status.size,
-					    " time=", status.modification_time.ms_since_1970);
+					    " time=", status.modification_time.ms_since_1970,
+					    " ", status.directory() ? " directory" : "",
+					    " ", status.symlink()   ? " symlink" : "");
 
 				if (status.directory()) {
 
-					String_dir g_path { parent_dir.path, "/", path };
+					String_dir g_path { parent_dir.path, "/", cpath };
 
 					if (verbose)
 						log(" File::_lookup - dir '", g_path,
@@ -646,7 +718,7 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 					}, [&]() {
 						auto entry = new (heap) Avl_file(status.inode);
 						entry->with_file([&](auto &file) {
-							file.name       = path;
+							file.name       = cpath;
 							file.dir_nodeid = msg.nodeid;
 						});
 
@@ -666,7 +738,17 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 				msg.executable = status.rwx.executable;
 			});
 		} catch (File_system::Lookup_failed) {
+
+			/* _lookup_sym will overwrite the fail if successful */
 			msg.fail();
+
+			with_open_dir(msg, parent_dir, [&]() {
+
+				Dir_handle parent = parent_dir.handle;
+
+				_lookup_sym(msg, parent, reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size);
+			});
+
 		} catch (...) {
 			msg.fail();
 			error(" File::_lookup: nodedid=", msg.nodeid, " - exception");
@@ -791,39 +873,51 @@ void Seoul::Filesystem::_set_attr(MessageFs &msg)
 
 	with_dir(msg.nodeid, [&](auto &entry) {
 		try {
-			error(" File::_set_attr nodeid=", msg.nodeid, " todo dir");
+			warning(" File::_set_attr nodeid=", msg.nodeid, " not implemented");
 		} catch(...) {
 			msg.fail();
 			error(" File::_set_attr: due to exception - dir");
 		}
-	}, [&]() {
-		try_file = true;
-	});
+
+	}, [&]() { try_file = true; });
 
 	if (!try_file)
 		return;
 
 	with_file(msg.nodeid, [&](auto &file) {
-		try {
-			if (msg.buffer.start) /* valid check for msg.buffer.size */
-				fs.truncate(file.handle, msg.buffer.size);
+		with_dir(file.dir_nodeid, [&](auto &dir) {
+			try {
+				if (msg.buffer.start) /* valid check for msg.buffer.size */
+					fs.truncate(file.handle, msg.buffer.size);
 
-			Status status = fs.status(file.handle);
+				auto h = file.handle;
 
-			msg.add_status(status.inode, status.size,
-			               status.modification_time.ms_since_1970,
-			               status.directory(), status.symlink());
+				if (!file.handle.value)
+					h = fs.file(dir.handle, file.name.string(), READ_ONLY,
+					            false /* no create */);
 
-			msg.writeable  = status.rwx.writeable;
-			msg.readable   = status.rwx.readable;
-			msg.executable = status.rwx.executable;
+				Status status = fs.status(h);
 
-		} catch(...) {
+				msg.add_status(status.inode, status.size,
+				               status.modification_time.ms_since_1970,
+				               status.directory(), status.symlink());
+
+				msg.writeable  = status.rwx.writeable;
+				msg.readable   = status.rwx.readable;
+				msg.executable = status.rwx.executable;
+
+				if (!file.handle.value)
+					fs.close(h);
+			} catch(...) {
+				msg.fail();
+				error(" File::_set_attr: due to exception - file");
+			}
+		}, [&]() {
 			msg.fail();
-			error(" File::_set_attr: due to exception - file");
-		}
+			error(" File::_set_attr: unknown dir nodeid ", file.dir_nodeid);
+		});
 	}, [&]() {
-		error(" File::_set_attr: unknown nodeid ", msg.nodeid);
+		error(" File::_set_attr: unknown file nodeid ", msg.nodeid);
 		msg.fail();
 	});
 }
@@ -861,7 +955,8 @@ bool Seoul::Filesystem::_handle_read_dir(Packet &packet)
 
 			if (verbose)
 				log(" File::_handle_read_dir ", i, " : ", name, " ", name_len,
-				    " inode=", entry.inode);
+				    " inode=", entry.inode,
+				    " ", entry.type == Node_type::SYMLINK ? " symlink" : "");
 
 			bool ok = msg.add_read_dir(name, unsigned(name_len), entry.inode,
 			                           entry.type == Node_type::DIRECTORY,
@@ -916,33 +1011,6 @@ bool Seoul::Filesystem::_handle_read_dir(Packet &packet)
 }
 
 
-void Seoul::Filesystem::_handle_read_file(Packet &packet)
-{
-	bool const ok = with_packet(packet, [&](auto) {
-
-		if (!packet.succeeded() || !_read_file_pending.constructed()) {
-			error(" File::_handle_read_file failure");
-			return false;
-		}
-
-		auto &msg = _read_file_pending->fs_delayed;
-
-		_copy_data(msg, packet);
-
-		mutex.release();
-
-		mb.bus_fs_commit.send(*_read_file_pending);
-
-		mutex.acquire();
-
-		return true;
-	});
-
-	if (!ok)
-		warning(" File::_handle_read_file - unexpected");
-}
-
-
 void Seoul::Filesystem::_handle_packet_stream()
 {
 	while (true) {
@@ -980,7 +1048,13 @@ void Seoul::Filesystem::_handle_packet_stream()
 				    " offset=", packet.offset());
 
 			if (_read_file_pending.constructed()) {
-				_handle_read_file(packet);
+				if (!_handle_async_read(packet, _read_file_pending))
+					warning(" File::_read_file handling - unexpected");
+				continue;
+			}
+			if (_read_link_pending.constructed()) {
+				if (!_handle_async_read(packet, _read_link_pending))
+					warning(" File::_read_link handling - unexpected");
 				continue;
 			}
 
@@ -1064,6 +1138,7 @@ void Seoul::Filesystem::_handle_ack()
 	_handle_packet_stream();
 
 	bool kick = (_read_file_pending.constructed() && !_queued_file_read) ||
+	            (_read_link_pending.constructed() && !_queued_link_read) ||
 	            (_sync_pending     .constructed() && !_queued_sync);
 
 	if (kick)
@@ -1087,6 +1162,8 @@ bool Seoul::Filesystem::receive(MessageFs &msg)
 	case MessageFs::WRITE_FILE : _write_file(msg); break;
 	case MessageFs::CLOSE_FILE : _close_file(msg); break;
 	case MessageFs::RENAME     : _rename    (msg); break;
+	case MessageFs::SYMLINK    : _sym_link  (msg); break;
+	case MessageFs::READLINK   : _read_link (msg); break;
 	case MessageFs::CREATE     : _create    (msg); break;
 	case MessageFs::DESTROY    : _destroy   (msg); break;
 	case MessageFs::GET_ATTR   : _get_attr  (msg); break;
