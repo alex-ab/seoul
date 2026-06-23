@@ -407,7 +407,8 @@ class Virtio_fs: public StaticReceiver<Virtio_fs>, Virtio::Device
 		{
 			_verbose = verbose;
 
-			auto len = sizeof(_fs_config.tag) < tag_len ? : tag_len;
+			auto len = sizeof(_fs_config.tag) < tag_len
+			         ? sizeof(_fs_config.tag) : tag_len;
 			memcpy(_fs_config.tag, tag, len);
 		}
 
@@ -1476,7 +1477,7 @@ unsigned Virtio_fs::fuse_op_read(int32 &err, Desc const &in, Desc &first_desc,
 
 		MessageFs msg(MessageFs::READ_FILE, _fs_id, nodeid, queue);
 
-		msg.buffer.start  = out_addr + out_addr_offset;
+		msg.buffer.start  = mword(out_addr + out_addr_offset);
 		msg.buffer.size   = (read_in.size - ret_read < out_size - out_addr_offset)
 		                  ?  read_in.size - ret_read : out_size - out_addr_offset;
 		msg.buffer.offset = read_in.offset + ret_read;

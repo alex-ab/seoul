@@ -36,7 +36,7 @@ void Seoul::Filesystem::_close_dir(MessageFs &msg)
 		if (_verbose)
 			log(" File::_close_dir: nodeid=", msg.nodeid, " fh=", msg.fh);
 
-		Dir_handle h { msg.fh };
+		Dir_handle h { mword(msg.fh) };
 
 		try {
 			fs.close(h);
@@ -155,7 +155,7 @@ void Seoul::Filesystem::_write_file(MessageFs &msg)
 		}
 
 		bool ok = _queue_write(file.handle, msg.buffer.start,
-		                       msg.buffer.size, msg.buffer.offset);
+		                       mword(msg.buffer.size), msg.buffer.offset);
 		if (!ok) {
 			_queued_write = true;
 			_write_pending.construct(fs_id, msg.nodeid, msg);
@@ -190,7 +190,8 @@ void Seoul::Filesystem::_remove_dir(MessageFs &msg)
 	Genode::Mutex::Guard guard(mutex);
 
 	with_dir(msg.nodeid, [&](auto &parent_dir) {
-		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
+		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+		                mword(msg.buffer.size)));
 		String_dir g_path { parent_dir.path, "/", name };
 
 		uint64_t key = 0;
@@ -241,8 +242,10 @@ void Seoul::Filesystem::_rename(MessageFs &msg)
 {
 	bool verbose = true;
 
-	String_dir src(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
-	String_dir dst(Cstring(reinterpret_cast<char *>(msg.buffer.start + src.length()), msg.buffer.size - src.length()));
+	String_dir src(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+	               mword(msg.buffer.size)));
+	String_dir dst(Cstring(reinterpret_cast<char *>(msg.buffer.start + src.length()),
+	               mword(msg.buffer.size - src.length())));
 
 	auto const dir_nodeid_src = msg.nodeid;
 	auto const dir_nodeid_dst = msg.fh;
@@ -320,8 +323,10 @@ void Seoul::Filesystem::_sym_link(MessageFs &msg)
 {
 	bool verbose = true;
 
-	String_dir dst(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
-	String_dir src(Cstring(reinterpret_cast<char *>(msg.buffer.start + dst.length()), msg.buffer.size - dst.length()));
+	String_dir dst(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+	               mword(msg.buffer.size)));
+	String_dir src(Cstring(reinterpret_cast<char *>(msg.buffer.start + dst.length()),
+	               mword(msg.buffer.size - dst.length())));
 
 	auto const dir_nodeid_dst = msg.nodeid;
 
@@ -381,7 +386,8 @@ void Seoul::Filesystem::_make_dir(MessageFs &msg)
 	Genode::Mutex::Guard guard(mutex);
 
 	with_dir(msg.nodeid, [&](auto &dir) {
-		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
+		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+		                mword(msg.buffer.size)));
 		String_dir g_path { dir.path, "/", name };
 
 		try {
@@ -457,7 +463,7 @@ void Seoul::Filesystem::_read_dir(MessageFs &msg)
 			return;
 		}
 
-		Dir_handle const dir { msg.fh };
+		Dir_handle const dir { mword(msg.fh) };
 
 		/* continuation of case A shortage */
 		if (_pending.queued) {
@@ -518,7 +524,7 @@ void Seoul::Filesystem::_destroy(MessageFs const &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	for (Avl_file * entry = nullptr; entry = _files.first();) {
+	for (Avl_file * entry = nullptr; (entry = _files.first());) {
 		entry->with_file([&](auto &file) {
 			/* keep root dir open */
 			if (file.handle == root)
@@ -537,7 +543,7 @@ void Seoul::Filesystem::_destroy(MessageFs const &msg)
 		destroy(heap, entry);
 	}
 
-	for (Avl_dir * entry = nullptr; entry = _dirs.first();) {
+	for (Avl_dir * entry = nullptr; (entry = _dirs.first());) {
 		entry->with_dir([&](auto &dir) {
 			/* keep root dir open */
 			if (dir.handle == root)
@@ -565,7 +571,8 @@ void Seoul::Filesystem::_create(MessageFs &msg)
 	Genode::Mutex::Guard guard(mutex);
 
 	with_dir(msg.nodeid, [&](auto &dir) {
-		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
+		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+		                mword(msg.buffer.size)));
 
 		Mode mode = ( msg.readable && msg.writeable) ? READ_WRITE
 		          : (!msg.readable && msg.writeable) ? WRITE_ONLY
@@ -609,7 +616,8 @@ void Seoul::Filesystem::_unlink(MessageFs &msg)
 	Genode::Mutex::Guard guard(mutex);
 
 	with_dir(msg.nodeid, [&](auto &parent_dir) {
-		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size));
+		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+		                mword(msg.buffer.size)));
 		uint64_t key = 0;
 
 		try {
@@ -682,7 +690,8 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	Cstring cpath (reinterpret_cast<char const *>(msg.buffer.start), msg.buffer.size);
+	Cstring cpath (reinterpret_cast<char const *>(msg.buffer.start),
+	               mword(msg.buffer.size));
 
 	bool verbose = false;
 
@@ -706,7 +715,7 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 				 * symlink will cause an exception - wtf
 				 * -> re-try by _lookup_sym
 				 */
-				File_handle h = fs.file(parent, { reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size },
+				File_handle h = fs.file(parent, { reinterpret_cast<char *>(msg.buffer.start), mword(msg.buffer.size) },
 				                        READ_ONLY, false);
 
 				Status status = fs.status(h);
@@ -776,7 +785,9 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 
 				Dir_handle parent = parent_dir.handle;
 
-				_lookup_sym(msg, parent, reinterpret_cast<char *>(msg.buffer.start), msg.buffer.size);
+				_lookup_sym(msg, parent,
+				            reinterpret_cast<char *>(msg.buffer.start),
+				            mword(msg.buffer.size));
 			});
 
 		} catch (...) {
@@ -1017,7 +1028,7 @@ bool Seoul::Filesystem::_handle_read_dir(Packet &packet)
 			wakeup = false;
 
 		auto &msg = _read_dir_pending->fs_delayed;
-		Dir_handle const dir { msg.fh };
+		Dir_handle const dir { mword(msg.fh) };
 
 		auto more = _queue_read_dir(dir, _pending.expect,
 		                            _pending.expect - _pending.missing);

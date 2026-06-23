@@ -1626,10 +1626,12 @@ class Machine : public StaticReceiver<Machine>
 
 				for (int i = 0; dmi->arg_names[i] && (i < MAX_ARGS); i++) {
 					if (node.has_attribute(dmi->arg_names[i])) {
-						if (dmi->arg_names[i] == "tag") {
-							auto tag = node.attribute_value(dmi->arg_names[i], String<sizeof(unsigned long)>());
+						if (String<4>(dmi->arg_names[i]) == "tag") {
+							auto tag = node.attribute_value("tag", String<sizeof(unsigned long)>());
 
-							argv[i] = *(unsigned long *)tag.string();
+							char txt[sizeof(tag)];
+							::memcpy(txt, tag.string(), sizeof(tag));
+							argv[i] = *(unsigned long *)txt;
 						} else
 							argv[i] = node.attribute_value(dmi->arg_names[i], ~0UL);
 

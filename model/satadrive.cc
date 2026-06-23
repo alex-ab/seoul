@@ -383,7 +383,7 @@ SataDrive::Job_result SataDrive::_do_operation(struct Operation &contract)
 
 			if (_dma[dmacount-1].bytecount > (transfer & block_mask)) {
 				job.lastoffset = _dma[dmacount-1].bytecount - (transfer & block_mask);
-				transfer &= ~block_mask;
+				transfer &= mword(~block_mask);
 			} else {
 				transfer -= _dma[dmacount-1].bytecount;
 				dmacount--;

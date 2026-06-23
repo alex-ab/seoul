@@ -87,7 +87,7 @@ class Seoul::Avl_file : public Genode::Avl_node<Seoul::Avl_file>
 
 		struct {
 			File_handle          handle     { 0 };
-			unsigned long        dir_nodeid { 0 };
+			uint64_t             dir_nodeid { 0 };
 			String<MAX_NAME_LEN> name;
 		} _entry { };
 
@@ -338,7 +338,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 				bool ok  = res.convert<bool>([&](auto const p) {
 
-					packet = Packet(p, file_handle, Packet::READ, size, pos);
+					packet = Packet(p, file_handle, Packet::READ, mword(size), pos);
 
 					if (tx.try_submit_packet(packet))
 						return true;
@@ -434,7 +434,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 			::memcpy(reinterpret_cast<void *>(msg.buffer.start),
 			         reinterpret_cast<void *>(tx.packet_content(packet)),
-			         msg.buffer.size);
+			         mword(msg.buffer.size));
 		}
 
 		bool _handle_async_read(Packet &packet, auto &check)
@@ -475,7 +475,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			}
 
 			with_file(msg.nodeid, [&](auto &file) {
-				active = _queue_read(file.handle, msg.buffer.size, msg.buffer.offset);
+				active = _queue_read(file.handle, mword(msg.buffer.size), msg.buffer.offset);
 
 				obj.construct(fs_id, msg.nodeid, msg);
 

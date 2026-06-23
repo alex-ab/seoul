@@ -1028,7 +1028,7 @@ struct MessageFs
 	bool add_status(uint64 f, uint64 f_size, uint64 mod_time, bool t_dir, bool t_sym)
 	{
 		fh = f;
-		buffer.start  = mod_time;
+		buffer.start  = mword(mod_time);
 		buffer.size   = f_size;
 		buffer.offset = file_type(t_dir, t_sym);
 
