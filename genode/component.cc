@@ -1855,7 +1855,7 @@ void Component::construct(Genode::Env &env)
 	Genode::log("--- Seoul VMM starting ---");
 
 	/* request max available memory */
-	auto vm_size = env.pd().avail_ram().value;
+	auto vm_size = env.pd().stats().ram.avail().value;
 	/* reserve some memory for the VMM */
 	vm_size -= vmm.vmm_size;
 	/* calculate max memory for the VM */

@@ -269,9 +269,9 @@ bool Seoul::Console::receive(MessageConsole &msg)
 			}
 
 			if (msg.view > 1 && msg.size) {
-				if (Genode::align_addr(msg.size, Genode::AT_PAGE) > _env.pd().avail_ram().value) {
+				if (Genode::align_addr(msg.size, Genode::AT_PAGE) > _env.pd().stats().ram.avail().value) {
 					error("gpu memory allocation denied, requires ", msg.size,
-					      ", available ", _env.pd().avail_ram(),
+					      ", available ", _env.pd().stats().ram.avail(),
 					      " id=", msg.view - 2);
 					return false;
 				}
@@ -469,7 +469,7 @@ bool Seoul::Console::_sufficient_ram(Gui::Area const &cur, Gui::Area const &area
 	if (!pixels)
 		return true;
 
-	auto const free_ram = _env.pd().avail_ram();
+	auto const free_ram = _env.pd().stats().ram.avail();
 	auto const required = Genode::align_addr(uint64(pixels) * 4, Genode::AT_PAGE);
 
 	/* heuristics */
