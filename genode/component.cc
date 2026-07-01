@@ -209,6 +209,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 		bool const                          _rdtsc_exit;
 		bool const                          _cpuid_native;
 		bool const                          _track_exits;
+		bool const                          _no_signals;
 		bool                                _warned_cpuid_once { };
 
 		/* initialize after other members, vCPU gets runnable immediately */
@@ -226,6 +227,16 @@ class Vcpu : public StaticReceiver<Vcpu>
 			return cpuid_native;
 		}
 
+		Genode::Vm_connection::Exit_config & exit_config(bool vmx, bool svm)
+		{
+			if (vmx)
+				_exit_config.config_exit = Vcpu::exit_config_intel;
+			else if (svm)
+				_exit_config.config_exit = Vcpu::exit_config_amd;
+
+			return _exit_config;
+		}
+
 	public:
 
 		Vcpu(Genode::Entrypoint    & ep,
@@ -241,19 +252,18 @@ class Vcpu : public StaticReceiver<Vcpu>
 		     bool     const          map_small,
 		     bool     const          rdtsc,
 		     bool     const          cpuid_native,
-		     bool     const          track_exits)
+		     bool     const          track_exits,
+		     bool     const          no_signals)
 		:
 			_handler(ep, *this, &Vcpu::_handle_vm_exception),
-//			         vmx ? &Vcpu::exit_config_intel :
-//			         svm ? &Vcpu::exit_config_amd : nullptr),
 			_guest_memory(guest_memory),
 			_motherboard(motherboard),
 			_vcpu(vcpu),
 			_vmx(vmx), _svm(svm), _map_small(map_small), _rdtsc_exit(rdtsc),
 			_cpuid_native(_init_cpuid_state(cpuid_native, vcpu_id)),
-			_track_exits(track_exits),
+			_track_exits(track_exits), _no_signals(no_signals),
 			_vm_con(vm_con),
-			_vm_vcpu(_vm_con, alloc, _handler, _exit_config)
+			_vm_vcpu(_vm_con, alloc, _handler, exit_config(vmx, svm))
 		{
 			if (!_svm && !_vmx)
 				Logging::panic("no SVM/VMX available, sorry");
@@ -266,9 +276,12 @@ class Vcpu : public StaticReceiver<Vcpu>
 		void unblock() { _block.up(); }
 		void off()     { _seoul_state.head.cpuid = ~0U; recall(); }
 
-		void recall() {
-//			_handler.local_submit();
-			recall_nova();
+		void recall()
+		{
+			if (_no_signals)
+				recall_nova();
+			else
+				_handler.local_submit();
 		}
 
 		mword _sm_sel() const { return Nova::NUM_INITIAL_PT_RESERVED +
@@ -502,7 +515,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 			});
 		}
 
-		void exit_config_intel(Genode::Vcpu_state &state, unsigned exit)
+		static bool exit_config_intel(Genode::Vcpu_state &state, unsigned exit)
 		{
 			CpuState dummy_state;
 			unsigned mtd = 0;
@@ -562,9 +575,11 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			Seoul::write_vcpu_state(dummy_state, mtd, state);
+
+			return true;
 		}
 
-		void exit_config_amd(Genode::Vcpu_state &state, unsigned exit)
+		static bool exit_config_amd(Genode::Vcpu_state &state, unsigned exit)
 		{
 			CpuState dummy_state;
 			unsigned mtd = 0;
@@ -607,6 +622,8 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			Seoul::write_vcpu_state(dummy_state, mtd, state);
+
+			return true;
 		}
 
 		/***********************************
@@ -1061,6 +1078,7 @@ struct Vmm {
 	bool cpuid_native      { };
 	bool memory_verbose    { };
 	bool track_exits       { };
+	bool no_signals        { };
 
 	void read_config(Genode::Node const &node)
 	{
@@ -1086,6 +1104,9 @@ struct Vmm {
 
 		info.node().with_optional_sub_node("kernel", [&](auto const &node) {
 			kernel = node.attribute_value("name", kernel); });
+
+		if (kernel == "nova")
+			no_signals = true;
 
 		if (kernel == "unknown")
 			return;
@@ -1276,7 +1297,8 @@ class Machine : public StaticReceiver<Machine>
 					                     _vcpus_up, has_vmx, has_svm,
 					                     _vmm.map_small, _vmm.rdtsc_exit,
 					                     _vmm.cpuid_native,
-					                     _vmm.track_exits);
+					                     _vmm.track_exits,
+					                     _vmm.no_signals);
 
 					_vcpus[_vcpus_up] = vcpu;
 					msg.value = _vcpus_up;
