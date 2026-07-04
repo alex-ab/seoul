@@ -81,6 +81,8 @@ MODEL_INFO(pmtimer, "io_port")
 MODEL_INFO(vga,     "io_base")
 
 MODEL_INFO(pcihostbridge, "bus_num", "bus_count", "io_base", "mem_base")
+MODEL_INFO(dpci, "class", "subclass", "instance", "bdf", "assign", "irqs", "map_mode", "verbose");
+
 MODEL_INFO(intel82576vf, "promisc", "mem_mmio", "mem_msix", "txpoll_us", "rx_map", "verbose")
 MODEL_INFO(rtl8029, "bdf", "irq", "port")
 

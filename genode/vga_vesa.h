@@ -30,7 +30,7 @@
 #include <service/logging.h>
 
 #include "gui.h"
-#include "guest_memory.h"
+#include "vm_memory.h"
 
 namespace Seoul {
 	class Vga_vesa;
@@ -49,7 +49,7 @@ class Seoul::Vga_vesa
 		Vga_vesa &operator = (Vga_vesa const &);
 
 		Genode::Mutex        _mutex { };
-		Seoul::Guest_memory &_memory;
+		Seoul::Vm_memory    &_memory;
 		VgaRegs             *_regs     { nullptr };
 		char                *_guest_fb { nullptr };
 		uint64               _fb_phys_base { 0 };
@@ -157,7 +157,7 @@ class Seoul::Vga_vesa
 
 	public:
 
-		Vga_vesa(Guest_memory &memory, char * binary_mono_ttf_start)
+		Vga_vesa(Vm_memory &memory, char * binary_mono_ttf_start)
 		:
 			_memory(memory),
 			_default_font(binary_mono_ttf_start, _glyph_buffer)

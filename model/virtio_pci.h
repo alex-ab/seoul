@@ -317,8 +317,8 @@ class Virtio::Device
 			if ((req_addr <  guest_base) ||
 			    (req_addr >= guest_base + guest_size) ||
 			    req_size == 0 || req_addr + req_size >= guest_base + guest_size) {
-				Logging::printf("Invalid guest physical address B %llx+%lx\n",
-				                req_addr, req_size);
+				Logging::printf("Invalid guest physical address B %llx+%lx %llx+%lx\n",
+				                req_addr, req_size, guest_base, guest_size);
 				return 0;
 			}
 

@@ -51,12 +51,13 @@
 #include "network.h"
 #include "disk.h"
 #include "state.h"
-#include "guest_memory.h"
+#include "vm_memory.h"
 #include "timeout_late.h"
 #include "gui.h"
 #include "audio.h"
 #include "xhci.h"
 #include "file.h"
+#include "pci.h"
 
 
 enum { verbose_debug = false };
@@ -190,7 +191,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 		Genode::Vcpu_handler<Vcpu>          _handler;
 		Genode::Vm_connection::Exit_config  _exit_config { };
 
-		Seoul::Guest_memory                &_guest_memory;
+		Seoul::Vm_memory                   &_vm_memory;
 		Motherboard                        &_motherboard;
 		VCpu                               &_vcpu;
 
@@ -229,7 +230,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 		     Genode::Allocator     & alloc,
 		     Genode::Env           & env,
 		     VCpu                  & vcpu,
-		     Seoul::Guest_memory   & guest_memory,
+		     Seoul::Vm_memory      & vm_memory,
 		     Motherboard           & motherboard,
 		     unsigned const          vcpu_id,
 		     bool     const          vmx,
@@ -242,7 +243,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 			_handler(ep, *this, &Vcpu::_handle_vm_exception),
 //			         vmx ? &Vcpu::exit_config_intel :
 //			         svm ? &Vcpu::exit_config_amd : nullptr),
-			_guest_memory(guest_memory),
+			_vm_memory(vm_memory),
 			_motherboard(motherboard),
 			_vcpu(vcpu),
 			_vmx(vmx), _svm(svm), _map_small(map_small), _rdtsc_exit(rdtsc),
@@ -667,7 +668,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 				Genode::log(__func__, " need_unmap handled ",
 				            Genode::Hex(vm_fault_addr), " ",
 				            " cr0=", Genode::Hex(state.cr0.value()));
-				_guest_memory.detach(vm_fault_addr & ~0xffful, 4096);
+				_vm_memory.detach(vm_fault_addr & ~0xffful, 4096);
 			}
 
 			if (sizeof(uintptr_t) == 4 && vm_fault_addr >= (1ull << (32 + 12)))
@@ -714,13 +715,13 @@ class Vcpu : public StaticReceiver<Vcpu>
 				state.discharge(); /* reset */
 
 			if (_map_small)
-				_guest_memory.attach_to_vm(_vm_con,
-				                           mem_region.page << PAGE_SIZE_LOG2,
-				                           1 << PAGE_SIZE_LOG2, !mem_region.read_only);
+				_vm_memory.attach_to_vm(_vm_con,
+				                        mem_region.page << PAGE_SIZE_LOG2,
+				                        1 << PAGE_SIZE_LOG2, !mem_region.read_only);
 			else
-				_guest_memory.attach_to_vm(_vm_con,
-				                           mem_region.start_page << PAGE_SIZE_LOG2,
-				                           mem_region.count << PAGE_SIZE_LOG2, !mem_region.read_only);
+				_vm_memory.attach_to_vm(_vm_con,
+				                        mem_region.start_page << PAGE_SIZE_LOG2,
+				                        mem_region.count << PAGE_SIZE_LOG2, !mem_region.read_only);
 
 			return true;
 		}
@@ -1033,6 +1034,8 @@ struct Vmm {
 	Attached_rom_dataspace config { env, "config" };
 	Attached_rom_dataspace info   { env, "platform_info" };
 
+	Seoul::Pci_platform    platform { };
+
 	Genode::Number_of_bytes vmm_size { 12 * 1024 * 1024 };
 
 	bool map_small         { };
@@ -1087,16 +1090,17 @@ class Machine : public StaticReceiver<Machine>
 {
 	private:
 
-		Vmm                   &_vmm;
-		Genode::Mutex          _mutex { };
-		Clock                  _clock;
-		Motherboard            _motherboard;
-		Seoul::Guest_memory   &_guest_memory;
-		Timeouts               _timeouts { _vmm.env, _motherboard };
-		unsigned short         _vcpus_up { };
+		Vmm              &_vmm;
+		Genode::Mutex     _mutex { };
+		Clock             _clock;
+		Motherboard       _motherboard;
+		Seoul::Vm_memory &_vm_memory;
+		Timeouts          _timeouts { _vmm.env, _motherboard };
+		unsigned short    _vcpus_up { };
 
-		Rtc::Session          *_rtc          { nullptr };
-		Seoul::Audio          *_audio        { nullptr };
+		Seoul::Pci        _pci;
+		Rtc::Session     *_rtc   { };
+		Seoul::Audio     *_audio { };
 
 		Genode::Constructible<Seoul::Xhci> _xhci { };
 
@@ -1141,6 +1145,11 @@ class Machine : public StaticReceiver<Machine>
 		{
 			switch (msg.type) {
 
+			case MessageHostOp::OP_ASSIGN_PCI:
+			case MessageHostOp::OP_ATTACH_IRQ:
+			case MessageHostOp::OP_ATTACH_PCI_IOMEM:
+			case MessageHostOp::OP_ALLOC_IOIO_REGION:
+				return false; /* handled by Pci class */
 			case MessageHostOp::OP_ALLOC_IOMEM:
 			case MessageHostOp::OP_ALLOC_IOMEM_SMALL:
 			{
@@ -1151,10 +1160,13 @@ class Machine : public StaticReceiver<Machine>
 
 				auto const guest_addr = msg.value;
 
+				error("ALLOC_IO_MEM ", Hex(guest_addr));
+
 				Region_map::Attr attr { };
 				attr.writeable = true;
 
 				auto const ds = _vmm.env.ram().alloc(msg.len);
+
 				auto const local_addr = _vmm.env.rm().attach(ds, attr).convert<addr_t>(
 					[&] (Env::Local_rm::Attachment &a) {
 						a.deallocate = false; return addr_t(a.ptr); },
@@ -1165,9 +1177,9 @@ class Machine : public StaticReceiver<Machine>
 
 				auto alloc_size = msg.type == MessageHostOp::OP_ALLOC_IOMEM_SMALL ?
 				                  msg.len_short : msg.len;
-				bool ok = _guest_memory.add_region(_vmm.heap, guest_addr,
-				                                   local_addr, ds,
-				                                   alloc_size);
+				bool ok = _vm_memory.add_region(_vmm.heap, guest_addr,
+				                                local_addr, ds,
+				                                alloc_size);
 				if (ok)
 					msg.ptr = reinterpret_cast<char *>(local_addr);
 
@@ -1184,8 +1196,8 @@ class Machine : public StaticReceiver<Machine>
 				if (msg.value != 0)
 					Logging::panic ("legacy op_guest_mem mode not supported");
 
-				msg.len = _guest_memory.backing_store_size() - msg.value;
-				msg.ptr = _guest_memory.backing_store_local_base() + msg.value;
+				msg.len = _vm_memory.backing_store_size() - msg.value;
+				msg.ptr = _vm_memory.backing_store_local_base() + msg.value;
 
 				if (verbose_debug)
 					Logging::printf(" -> len=0x%zx, ptr=0x%p\n",
@@ -1197,12 +1209,12 @@ class Machine : public StaticReceiver<Machine>
 			 */
 			case MessageHostOp::OP_RESERVE_IO_RANGE:
 
-				msg.phys = _guest_memory.alloc_io_memory(msg.value);
+				msg.phys = _vm_memory.alloc_io_memory(msg.value);
 				return true;
 
 			case MessageHostOp::OP_DETACH_MEM:
 
-				_guest_memory.detach(msg.value, msg.len);
+				_vm_memory.detach(msg.value, msg.len);
 				return true;
 
 			case MessageHostOp::OP_VCPU_CREATE_BACKEND:
@@ -1252,7 +1264,7 @@ class Machine : public StaticReceiver<Machine>
 					(void)_vcpus_active.set(_vcpus_up, 1);
 
 					auto vcpu = new Vcpu(*ep, _vmm.vm_con, _vmm.heap, _vmm.env,
-					                     *msg.vcpu, _guest_memory, _motherboard,
+					                     *msg.vcpu, _vm_memory, _motherboard,
 					                     _vcpus_up, has_vmx, has_svm,
 					                     _vmm.map_small, _vmm.rdtsc_exit,
 					                     _vmm.cpuid_native,
@@ -1468,20 +1480,6 @@ class Machine : public StaticReceiver<Machine>
 			return true;
 		}
 
-		bool receive(MessagePciConfig &msg)
-		{
-			if (verbose_debug)
-				Logging::printf("MessagePciConfig\n");
-			return false;
-		}
-
-		bool receive(MessageAcpi &msg)
-		{
-			if (verbose_debug)
-				Logging::printf("MessageAcpi\n");
-			return false;
-		}
-
 		bool receive(MessageLegacy &msg)
 		{
 			if (msg.type == MessageLegacy::RESET) {
@@ -1538,19 +1536,20 @@ class Machine : public StaticReceiver<Machine>
 		/**
 		 * Constructor
 		 */
-		Machine(Seoul::Guest_memory &guest_memory, Vmm &vmm)
+		Machine(Seoul::Vm_memory &vm_memory, Vmm &vmm,
+		        Genode::uint64_t base)
 		:
 			_vmm(vmm),
 			_clock(_tsc_from_platform_info(_vmm.info.node())),
 			_motherboard(&_clock, nullptr),
-			_guest_memory(guest_memory)
+			_vm_memory(vm_memory),
+			_pci(_vmm.env, _motherboard, _vmm.heap, _vm_memory, _vmm.platform,
+			     base)
 		{
 			/* register host operations, called back by the VMM */
 			_motherboard.bus_hostop.add  (this, receive_static<MessageHostOp>);
 			_motherboard.bus_timer.add   (this, receive_static<MessageTimer>);
 			_motherboard.bus_time.add    (this, receive_static<MessageTime>);
-			_motherboard.bus_hwpcicfg.add(this, receive_static<MessageHwPciConfig>);
-			_motherboard.bus_acpi.add    (this, receive_static<MessageAcpi>);
 			_motherboard.bus_legacy.add  (this, receive_static<MessageLegacy>);
 			_motherboard.bus_audio.add   (this, receive_static<MessageAudio>);
 
@@ -1872,17 +1871,22 @@ void Component::construct(Genode::Env &env)
 
 	Genode::log(" framebuffer ", width, "x", height);
 
+	/* XXX - make configurable */
+	vmm.platform.construct(env);
+	if (vmm.platform.constructed())
+		Genode::warning(" principal PCI passthrough support enabled");
+
 	/* setup guest memory */
-	static Seoul::Guest_memory guest_memory(env, vmm.heap, vmm.vm_con, vm_size,
-	                                        vmm.memory_verbose);
+	static Seoul::Vm_memory vm_memory(env, vmm.heap, vmm.vm_con, vmm.platform,
+	                                  vm_size, vmm.memory_verbose);
 
 	/* diagnostic messages */
-	guest_memory.dump_regions();
+	vm_memory.dump_regions();
 
-	if (!guest_memory.backing_store_local_base()) {
+	if (!vm_memory.backing_store_local_base()) {
 		Genode::error("Not enough space left for ",
-		              guest_memory.backing_store_local_base() ? "framebuffer"
-		                                                      : "VMM");
+		              vm_memory.backing_store_local_base() ? "framebuffer"
+		                                                   : "VMM");
 		env.parent().exit(-1);
 		return;
 	}
@@ -1894,15 +1898,19 @@ void Component::construct(Genode::Env &env)
 
 	heap_init_env(&vmm.heap);
 
+	/* Qemu */
+	auto const host_bdf_base { 0xb0000000ull };
+	//auto const host_bdf_base { 0xe0000000ull };
+
 	/* create the PC machine based on the configuration given */
-	static Machine machine(guest_memory, vmm);
+	static Machine machine(vm_memory, vmm, host_bdf_base);
 
 	static Seoul::Console vcon(env, vmm.heap, machine.motherboard(),
-	                           Gui::Area(width, height), guest_memory);
+	                           Gui::Area(width, height), vm_memory);
 
 	static Seoul::Disk vdisk(env, machine.motherboard(),
-	                         guest_memory.backing_store_local_base(),
-	                         guest_memory.backing_store_size(),
+	                         vm_memory.backing_store_local_base(),
+	                         vm_memory.backing_store_size(),
 	                         vmm.config.node());
 
 	vmm.config.node().with_sub_node("machine",

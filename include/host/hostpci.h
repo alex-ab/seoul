@@ -171,13 +171,25 @@ class HostPci
     } else if (msi_offset) {
       unsigned ctrl = conf_read(bdf, msi_offset);
       unsigned base = msi_offset + 1;
-      conf_write(bdf, base+0, unsigned(msg1.msi_address));
-      conf_write(bdf, base+1, unsigned(msg1.msi_address >> 32));
-      if (ctrl & 0x800000) base += 1;
-      conf_write(bdf, base+1, msg1.msi_value);
 
-      // we use only a single message and enable MSIs here
-      conf_write(bdf, msi_offset, (ctrl & ~0x700000) | 0x10000);
+      /* on Genode already configured XXX */
+      if (!msg1.msi_address) {
+        msg1.msi_address  = uint64(conf_read(bdf, base + 0));
+        msg1.msi_address |= uint64(conf_read(bdf, base + 1)) << 32;
+        if (ctrl & 0x800000) base += 1;
+        msg1.msi_value = conf_read(bdf, base+1);
+        msg1.msi_gsi   = msg1.msi_value & 0xff;
+
+      } else {
+
+        conf_write(bdf, base+0, unsigned(msg1.msi_address));
+        conf_write(bdf, base+1, unsigned(msg1.msi_address >> 32));
+        if (ctrl & 0x800000) base += 1;
+        conf_write(bdf, base+1, msg1.msi_value);
+
+        // we use only a single message and enable MSIs here
+        conf_write(bdf, msi_offset, (ctrl & ~0x700000) | 0x10000);
+      }
       Logging::printf("MSI %x enabled for bdf %x MSI %llx/%x\n", msg1.msi_gsi, bdf, msg1.msi_address, msg1.msi_value);
     }
 
