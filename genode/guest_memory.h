@@ -231,6 +231,22 @@ class Seoul::Guest_memory
 			return size_t(_guest_size + (_io_mem_gap ? _io_mem_size : 0));
 		}
 
+		bool remove_region(addr_t const guest_addr, auto const &fn)
+		{
+			for (auto r = _regions.first(); r; r = r->next()) {
+				if (r->_guest_addr != guest_addr)
+					continue;
+
+				_regions.remove(r);
+
+				fn(r);
+
+				return true;
+			}
+
+			return false;
+		}
+
 		bool add_region(Allocator    &alloc,
 		                addr_t const  guest_addr,
 		                addr_t const  local_addr,

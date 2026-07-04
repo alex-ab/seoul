@@ -57,6 +57,7 @@
 #include "audio.h"
 #include "xhci.h"
 #include "file.h"
+#include "pci.h"
 
 
 enum { verbose_debug = false };
@@ -1100,6 +1101,8 @@ class Machine : public StaticReceiver<Machine>
 
 		Genode::Constructible<Seoul::Xhci> _xhci { };
 
+		Seoul::Pci             _pci;
+
 		using Vcpus_active = Genode::Bit_array<64>;
 
 		Vcpu *                 _vcpus[16]    { nullptr };
@@ -1141,6 +1144,11 @@ class Machine : public StaticReceiver<Machine>
 		{
 			switch (msg.type) {
 
+			case MessageHostOp::OP_ASSIGN_PCI:
+			case MessageHostOp::OP_ATTACH_IRQ:
+			case MessageHostOp::OP_ATTACH_PCI_IOMEM:
+			case MessageHostOp::OP_ALLOC_IOIO_REGION:
+				return false; /* handled by Pci class */
 			case MessageHostOp::OP_ALLOC_IOMEM:
 			case MessageHostOp::OP_ALLOC_IOMEM_SMALL:
 			{
@@ -1151,10 +1159,13 @@ class Machine : public StaticReceiver<Machine>
 
 				auto const guest_addr = msg.value;
 
+				error("ALLOC_IO_MEM ", Hex(guest_addr));
+
 				Region_map::Attr attr { };
 				attr.writeable = true;
 
 				auto const ds = _vmm.env.ram().alloc(msg.len);
+
 				auto const local_addr = _vmm.env.rm().attach(ds, attr).convert<addr_t>(
 					[&] (Env::Local_rm::Attachment &a) {
 						a.deallocate = false; return addr_t(a.ptr); },
@@ -1468,20 +1479,6 @@ class Machine : public StaticReceiver<Machine>
 			return true;
 		}
 
-		bool receive(MessagePciConfig &msg)
-		{
-			if (verbose_debug)
-				Logging::printf("MessagePciConfig\n");
-			return false;
-		}
-
-		bool receive(MessageAcpi &msg)
-		{
-			if (verbose_debug)
-				Logging::printf("MessageAcpi\n");
-			return false;
-		}
-
 		bool receive(MessageLegacy &msg)
 		{
 			if (msg.type == MessageLegacy::RESET) {
@@ -1543,14 +1540,13 @@ class Machine : public StaticReceiver<Machine>
 			_vmm(vmm),
 			_clock(_tsc_from_platform_info(_vmm.info.node())),
 			_motherboard(&_clock, nullptr),
-			_guest_memory(guest_memory)
+			_guest_memory(guest_memory),
+			_pci(_vmm.env, _motherboard, _vmm.heap, _guest_memory)
 		{
 			/* register host operations, called back by the VMM */
 			_motherboard.bus_hostop.add  (this, receive_static<MessageHostOp>);
 			_motherboard.bus_timer.add   (this, receive_static<MessageTimer>);
 			_motherboard.bus_time.add    (this, receive_static<MessageTime>);
-			_motherboard.bus_hwpcicfg.add(this, receive_static<MessageHwPciConfig>);
-			_motherboard.bus_acpi.add    (this, receive_static<MessageAcpi>);
 			_motherboard.bus_legacy.add  (this, receive_static<MessageLegacy>);
 			_motherboard.bus_audio.add   (this, receive_static<MessageAudio>);
 

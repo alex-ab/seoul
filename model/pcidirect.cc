@@ -7,13 +7,15 @@
  * Copyright (C) 2013 Jacek Galowicz, Intel Corporation.
  * Copyright (C) 2013 Markus Partheymueller, Intel Corporation.
  *
- * This file is part of Vancouver.
+ * Copyright (C) 2026 Alexander Boettcher
  *
- * Vancouver is free software: you can redistribute it and/or modify
+ * This file is part of Seoul.
+ *
+ * Seoul is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Vancouver is distributed in the hope that it will be useful, but
+ * Seoul is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License version 2 for more details.
@@ -50,22 +52,24 @@ class DirectPciDevice : public StaticReceiver<DirectPciDevice>, private HostVfPc
   unsigned  _guestbdf  { 0 };
   unsigned  _irq_count { 0 };
   unsigned *_host_irqs { nullptr };
-  MsiXTableEntry *_msix_table;
-  MsiXTableEntry *_msix_host_table;
-  unsigned  _cfgspace[PCI_CFG_SPACE_DWORDS];
-  unsigned  _bar_count;
-  unsigned  _msi_cap   { 0 };
-  bool      _msi_64bit { false };
-  unsigned  _msix_cap  { 0 };
-  unsigned  _msix_bar  { ~0U };
+  MsiXTableEntry *_msix_table { };
+  MsiXTableEntry *_msix_host_table { };
+  unsigned        _cfgspace[PCI_CFG_SPACE_DWORDS];
+  unsigned  const _bar_count;
+  unsigned        _msi_cap   { 0 };
+  bool            _msi_64bit { false };
+  unsigned        _msix_cap  { 0 };
+  unsigned        _msix_bar  { ~0U };
+  bool  const _vf;
+  uint8 const _map_mode;
+
   struct {
+    uint64        base;
     unsigned long size;
     char *   ptr;
     bool     io;
     unsigned short port;
   } _barinfo[MAX_BAR];
-  bool const _vf;
-  unsigned  _map_mode;
 
 private:
 
@@ -77,44 +81,49 @@ private:
 
 public:
 
-  enum {
-    MAP_MODE_DISABLED = 0,
-    MAP_MODE_SAFE     = 1,
-    MAP_MODE_UNSAFE   = 2,
-  };
+	enum {
+		MAP_MODE_DISABLED = 0,
+		MAP_MODE_SAFE     = 1,
+		MAP_MODE_UNSAFE   = 2,
+	};
 
-  void read_all_bars(unsigned bdf, unsigned long *base, unsigned long *size) {
+	void read_all_bars(unsigned bdf, unsigned long *base, unsigned long *size)
+	{
+		memset(base, 0, MAX_BAR*sizeof(*base));
+		memset(size, 0, MAX_BAR*sizeof(*size));
 
-    memset(base, 0, MAX_BAR*sizeof(*base));
-    memset(size, 0, MAX_BAR*sizeof(*size));
+		// disable device
+		unsigned cmd = conf_read(bdf, 1);
+		conf_write(bdf, 1, cmd & ~0x7);
 
-    // disable device
-    unsigned cmd = conf_read(bdf, 1);
-    conf_write(bdf, 1, cmd & ~0x7);
+		// read bars
+		for (auto i = 0u; i < count_bars(bdf); i++) {
+			unsigned old = conf_read(bdf, BAR0 + i);
 
-    // read bars
-    for (unsigned i=0; i < count_bars(bdf); i++) {
-      unsigned old = conf_read(bdf, BAR0 + i);
-      conf_write(bdf, BAR0 + i, 0xFFFFFFFFU);
-      unsigned bar = conf_read(bdf, BAR0 + i);
-      if (old & BAR_IO) {
-	size[i] = (((bar & BAR_IO_MASK) ^ 0xFFFFU) + 1) & 0xffff;
-	base[i] = old;
-      }
-      else {
-	size[i] = ((bar & BAR_MEM_MASK) ^ 0xFFFFFFFFU) + 1;
-	base[i] = old & BAR_MEM_MASK;
-      }
-      conf_write(bdf, BAR0 + i, old);
-      if ((old & 7) == 0x4) {
-	if (conf_read(bdf, BAR0 + i + 1)) Logging::panic("64bit bar %x:%8x with high bits set!", conf_read(bdf, BAR0 + i + 1), old);
-	i++;
-      }
-    }
+			conf_write(bdf, BAR0 + i, 0xFFFFFFFFU);
 
-    // reenable device
-    conf_write(bdf, 1, cmd);
-  }
+			unsigned bar = conf_read(bdf, BAR0 + i);
+			if (old & BAR_IO) {
+				size[i] = (((bar & BAR_IO_MASK) ^ 0xFFFFU) + 1) & 0xffff;
+				base[i] = old;
+			} else {
+				size[i] = ((bar & BAR_MEM_MASK) ^ 0xFFFFFFFFU) + 1;
+				base[i] = old & BAR_MEM_MASK;
+			}
+
+			conf_write(bdf, BAR0 + i, old);
+
+			Logging::printf("%s %u %lx+%lx\n", __func__, i, base[i], size[i]);
+
+			if ((old & 7) == 0x4) {
+				if (conf_read(bdf, BAR0 + i + 1)) Logging::panic("64bit bar %x:%8x with high bits set!", conf_read(bdf, BAR0 + i + 1), old);
+				i++;
+			}
+		}
+
+		// reenable device
+		conf_write(bdf, 1, cmd);
+	}
 
   /**
    * Read all vf bars.
@@ -143,30 +152,49 @@ public:
 
 private:
 
-  /**
-   * Map the bars.
-   */
-  void map_bars(unsigned long *bases, unsigned long *sizes) {
-    for (unsigned i=0; i < _bar_count; i++) {
-      _barinfo[i].size = sizes[i];
-      if (!bases[i]) continue;
-      if ((bases[i] & 1) == 1) {
-	_barinfo[i].io   = true;
-	_barinfo[i].port = uint16(bases[i] & BAR_IO_MASK);
+	/**
+	 * Map the bars.
+	 */
+	void map_bars(unsigned long *bases, unsigned long *sizes)
+	{
+		for (auto i = 0u; i < _bar_count; i++) {
 
-	MessageHostOp msg(MessageHostOp::OP_ALLOC_IOIO_REGION, (_barinfo[i].port << 8) |  Cpu::bsr(sizes[i] | 0x3));
-	_mb.bus_hostop.send(msg);
-      } else {
-	_barinfo[i].io  = false;
+			auto & barinfo  = _barinfo[i];
+			auto & base     = bases[i];
+			auto const size = sizes[i];
 
-	MessageHostOp msg(MessageHostOp::OP_ALLOC_IOMEM, bases[i] & ~0x1f, 1 << Cpu::bsr(((sizes[i] - 1) | 0xfff) + 1));
-	if (_mb.bus_hostop.send(msg) && msg.ptr)
-	  _barinfo[i].ptr = msg.ptr + (bases[i] & 0x10);
-	else
-	  Logging::panic("can not map IOMEM region %lx+%zx %p", msg.value, msg.len, msg.ptr);
-      }
-    }
-  }
+			barinfo.size = size;
+			barinfo.base = base;
+
+			if (!base) continue;
+			if ((base & 1) == 1) {
+				barinfo.io   = true;
+				barinfo.port = uint16(base & BAR_IO_MASK);
+
+				MessageHostOp msg(MessageHostOp::OP_ALLOC_IOIO_REGION, (barinfo.port << 8) |  Cpu::bsr(size | 0x3));
+				_mb.bus_hostop.send(msg);
+
+				Logging::printf("------- io port\n");
+			} else {
+				barinfo.io  = false;
+
+				MessageHostOp msg(MessageHostOp::OP_ALLOC_IOMEM, base & ~0x1f, 1 << Cpu::bsr(((size - 1) | 0xfff) + 1));
+
+				Logging::printf("------- io mem %lx-%x\n",
+				                base & ~0x1f,
+				                1 << Cpu::bsr(((size - 1) | 0xfff) + 1));
+
+				if (_mb.bus_hostop.send(msg) && msg.ptr)
+					barinfo.ptr = msg.ptr + (base & 0x10);
+				else
+					Logging::panic("can not map IOMEM region %lx+%zx %p", msg.value, msg.len, msg.ptr);
+
+				Logging::printf("------- io mem %lx-%x barinfo.ptr=%p msg.ptr=%p\n",
+				                base & ~0x1f,
+				                1 << Cpu::bsr(((size - 1) | 0xfff) + 1), barinfo.ptr, msg.ptr);
+			}
+		}
+	}
 
 
   bool match_iobars(uint16 const port, uint16 &newport, unsigned size) const
@@ -215,130 +243,160 @@ private:
  public:
 
 
-  bool receive(MessageIOIn &msg)
-  {
-    auto const old_port = msg.port;
+	bool receive(MessageIOIn &msg)
+	{
+		auto const old_port = msg.port;
 
-    if (!match_iobars(old_port, msg.port, 1 << msg.type))
-      return false;
+		if (!match_iobars(old_port, msg.port, 1 << msg.type))
+			return false;
 
-    bool res = _mb.bus_hwioin.send(static_cast<MessageHwIOIn&>(msg), true);
-    msg.port = old_port;
-    return res;
-  }
+		Logging::printf("pcidirect: io port in %x -> %x\n", old_port, msg.port);
 
-
-  bool receive(MessageIOOut &msg)
-  {
-    auto const old_port = msg.port;
-
-    if (!match_iobars(old_port, msg.port, 1 << msg.type))
-      return false;
-
-    bool res = _mb.bus_hwioout.send(static_cast<MessageHwIOOut&>(msg), true);
-    msg.port = old_port;
-    return res;
-  }
-
-
-  bool receive(MessagePciConfig &msg)
-  {
-    if (msg.bdf != _guestbdf) return false;
-
-    assert(msg.dword < PCI_CFG_SPACE_DWORDS);
-    if (msg.type == MessagePciConfig::TYPE_READ) {
-      bool internal = (msg.dword == 0) || in_range(msg.dword, 0x4, MAX_BAR);
-      if (_msi_cap)
-	internal = internal || in_range(msg.dword, _msi_cap, (_msi_64bit ? 4 : 3));
-
-      if (internal)
-	msg.value = _cfgspace[msg.dword];
-      else
-	msg.value = conf_read(_hostbdf, msg.dword);
-
-      // disable multi-function devices
-      if (msg.dword == 3)         msg.value &= ~0x800000;
-      // we support only a single MSI vector
-      if (_msi_cap && msg.dword == _msi_cap)  msg.value &= ~0xe0000;
-
-      return true;
-    }
-
-    // WRITE
-    unsigned mask = ~0u;
-    if (!msg.dword) mask = 0;
-    if (in_range(msg.dword, BAR0, MAX_BAR)) mask = unsigned(~(_barinfo[msg.dword - BAR0].size - 1));
-    if (_msi_cap) {
-      if (msg.dword == _msi_cap) mask = 0x10000;  // only the MSI enable bit can be toggled
-      if (msg.dword == (_msi_cap + 1)) mask = ~3u;
-      if (msg.dword == (_msi_cap + 2)) mask = ~0u;
-      if (msg.dword == (_msi_cap + (_msi_64bit ? 3 : 2))) mask = 0xffff;
-    }
-
-    if (~mask)
-      _cfgspace[msg.dword] = (_cfgspace[msg.dword] & ~mask) | (msg.value & mask);
-    else {
-      //write through
-      conf_write(_hostbdf, msg.dword, msg.value);
-      _cfgspace[msg.dword] = conf_read(_hostbdf, msg.dword);
-    }
-    return true;
-  }
-
-  bool claim(MessageIrq &msg) {
-    for (unsigned i = 0; i < _irq_count; i++)
-      if (_host_irqs[i] == msg.line) return true;
-
-    return false;
-  }
-  bool receive(MessageIrq &msg)
-  {
-    for (unsigned i = 0; i < _irq_count; i++)
-      if (_host_irqs[i] == msg.line) {
-
-	// MSI enabled?
-	if (_msi_cap && _cfgspace[_msi_cap] & 0x10000) {
-	  unsigned idx = _msi_cap;
-	  unsigned long long msi_address;
-	  msi_address = _cfgspace[++idx];
-	  if (_cfgspace[_msi_cap] & 0x800000)
-	    msi_address |= static_cast<unsigned long long>(_cfgspace[++idx]) << 32;
-	  unsigned msi_data = _cfgspace[++idx] & 0xffff;
-	  unsigned multiple_msgs = 1 << ((_cfgspace[_msi_cap] >> 20) & 0x7);
-	  if (i < multiple_msgs) msi_data |= i;
-
-	  MessageMem msg2(false, msi_address, &msi_data);
-	  return _mb.bus_mem.send(msg2);
+		bool res = _mb.bus_hwioin.send(static_cast<MessageHwIOIn&>(msg), true);
+		msg.port = old_port;
+		return res;
 	}
 
-	// MSI-X enabled?
-	if (_cfgspace[_msix_cap] >> 31 && _msix_table) {
-	  MessageMem msg2(false, _msix_table[i].address, &_msix_table[i].data);
-	  return _mb.bus_mem.send(msg2);
+
+	bool receive(MessageIOOut &msg)
+	{
+		auto const old_port = msg.port;
+
+		if (!match_iobars(old_port, msg.port, 1 << msg.type))
+			return false;
+
+		Logging::printf("pcidirect: io port out %x -> %x\n", old_port, msg.port);
+
+		bool res = _mb.bus_hwioout.send(static_cast<MessageHwIOOut&>(msg), true);
+		msg.port = old_port;
+		return res;
 	}
 
-	// we send a single GSI
-	MessageIrqLines msg2(msg.type, _cfgspace[15] & 0xff);
-	return _mb.bus_irqlines.send(msg2);
-      }
-    return false;
-  }
+
+	bool receive(MessagePciConfig &msg)
+	{
+		if (msg.bdf != _guestbdf) return false;
+
+		assert(msg.dword < PCI_CFG_SPACE_DWORDS);
+
+		if (msg.type == MessagePciConfig::TYPE_READ) {
+			Logging::printf("pcidirect pci config read\n");
+
+			bool internal = (msg.dword == 0) || in_range(msg.dword, 0x4, MAX_BAR);
+			if (_msi_cap)
+				internal = internal || in_range(msg.dword, _msi_cap, (_msi_64bit ? 4 : 3));
+
+			if (internal)
+				msg.value = _cfgspace[msg.dword];
+			else
+				msg.value = conf_read(_hostbdf, msg.dword);
+
+			// disable multi-function devices
+			if (msg.dword == 3) msg.value &= ~0x800000;
+			// we support only a single MSI vector
+			if (_msi_cap && msg.dword == _msi_cap)  msg.value &= ~0xe0000;
+
+			return true;
+		}
+
+		Logging::printf("pcidirect pci config write\n");
+
+		// WRITE
+		unsigned mask = !msg.dword ? 0u : ~0u;
+
+		if (in_range(msg.dword, BAR0, MAX_BAR))
+			mask = unsigned(~(_barinfo[msg.dword - BAR0].size - 1));
+
+		if (_msi_cap) {
+			if (msg.dword == _msi_cap) mask = 0x10000;  // only the MSI enable bit can be toggled
+			if (msg.dword == (_msi_cap + 1)) mask = ~3u;
+			if (msg.dword == (_msi_cap + 2)) mask = ~0u;
+			if (msg.dword == (_msi_cap + (_msi_64bit ? 3 : 2))) mask = 0xffff;
+		}
+
+		if (~mask)
+			_cfgspace[msg.dword] = (_cfgspace[msg.dword] & ~mask) | (msg.value & mask);
+		else {
+			//write through
+			conf_write(_hostbdf, msg.dword, msg.value);
+			_cfgspace[msg.dword] = conf_read(_hostbdf, msg.dword);
+		}
+
+		return true;
+	}
+
+	bool claim(MessageIrq &msg)
+	{
+		for (auto i = 0u; i < _irq_count; i++)
+			if (_host_irqs[i] == msg.line) return true;
+
+		return false;
+	}
+
+	bool receive(MessageIrq &msg)
+	{
+		Logging::printf("%u message irq pcidirect type=%u line=%u\n", __LINE__, unsigned(msg.type), msg.line);
+
+		for (unsigned i = 0; i < _irq_count; i++)
+			if (_host_irqs[i] == msg.line) {
+
+				Logging::printf("%u message irq pcidirect type=%u line=%u\n", __LINE__, unsigned(msg.type), msg.line);
+
+				// MSI enabled?
+				if (_msi_cap && _cfgspace[_msi_cap] & 0x10000) {
+					Logging::printf("%u message irq pcidirect type=%u line=%u\n", __LINE__, unsigned(msg.type), msg.line);
+					unsigned idx = _msi_cap;
+					unsigned long long msi_address;
+					msi_address = _cfgspace[++idx];
+					if (_cfgspace[_msi_cap] & 0x800000)
+						msi_address |= static_cast<unsigned long long>(_cfgspace[++idx]) << 32;
+					unsigned msi_data = _cfgspace[++idx] & 0xffff;
+					unsigned multiple_msgs = 1 << ((_cfgspace[_msi_cap] >> 20) & 0x7);
+					if (i < multiple_msgs) msi_data |= i;
+
+					MessageMem msg2(false, msi_address, &msi_data);
+					return _mb.bus_mem.send(msg2);
+				}
+
+				// MSI-X enabled?
+				if (_cfgspace[_msix_cap] >> 31 && _msix_table) {
+					Logging::printf("%u message irq pcidirect type=%u line=%u\n", __LINE__, unsigned(msg.type), msg.line);
+					MessageMem msg2(false, _msix_table[i].address, &_msix_table[i].data);
+					return _mb.bus_mem.send(msg2);
+				}
+
+				Logging::printf("%u message irq pcidirect type=%u line=%u --> irq line=%u pin=%u\n",
+				                __LINE__, unsigned(msg.type), msg.line,
+				                _cfgspace[15] & 0xff, (_cfgspace[15] >> 8) & 0xff);
+
+				// we send a single GSI
+				MessageIrqLines msg2(msg.type, 5); //_cfgspace[15] & 0xff);
+				return _mb.bus_irqlines.send(msg2);
+		}
+
+		return false;
+	}
 
 
-  bool receive(MessageIrqNotify &msg)
-  {
-    // XXX MSIs are edge triggered!
-    unsigned irq = _cfgspace[15] & 0xff;
-    if (msg.baseirq != (irq & ~7) || !(msg.mask & (1 << (irq & 7)))) return false;
-    MessageHostOp msg2(MessageHostOp::OP_NOTIFY_IRQ, _host_irqs[0]);
-    return _mb.bus_hostop.send(msg2);
-  }
+	bool receive(MessageIrqNotify &msg)
+	{
+		Logging::printf("--- irq notify --- pci direct\n");
+
+		return false;
+		// XXX MSIs are edge triggered!
+		unsigned irq = _cfgspace[15] & 0xff;
+		if (msg.baseirq != (irq & ~7) || !(msg.mask & (1 << (irq & 7)))) return false;
+
+		MessageHostOp msg2(MessageHostOp::OP_NOTIFY_IRQ, _host_irqs[0]);
+		return _mb.bus_hostop.send(msg2);
+	}
 
   bool claim(MessageMem &msg)
   {
     unsigned *ptr;
     return match_bars(msg.phys, 4, ptr);
   }
+
   bool receive(MessageMem &msg)
   {
     unsigned *ptr;
@@ -361,48 +419,64 @@ private:
   }
 
 
-  bool  receive(MessageMemRegion &msg) {
-    for (unsigned i=0; i < _bar_count; i++) {
-      if (_barinfo[i].io || ! _barinfo[i].size || !in_range(msg.page << 12, _cfgspace[BAR0 + i] & ~0x7, _barinfo[i].size)) continue;
+	bool receive(MessageMemRegion &msg)
+	{
+		for (auto i = 0u; i < _bar_count; i++) {
+			auto &barinfo = _barinfo[i];
+			auto &cfgbar  = _cfgspace[BAR0 + i];
 
-      msg.start_page = _cfgspace[BAR0 + i] >> 12;
-      msg.count      = _barinfo[i].size >> 12;
-      msg.ptr        = _barinfo[i].ptr;
+			if (barinfo.io || ! barinfo.size || !in_range(msg.page << 12, cfgbar & ~0x7, barinfo.size))
+				continue;
 
-      // Rounding up BAR size to page size in unsafe mode, because
-      // the user wants to shoot himself in the foot.
-      msg.count = (_barinfo[i].size + (_map_mode == MAP_MODE_UNSAFE ? 0xFFF : 0)) >> 12;
+			msg.start_page = cfgbar >> 12;
+			msg.count      = barinfo.size >> 12;
+			msg.ptr        = barinfo.ptr;
 
-      // Check whether something bad actually happened and warn the
-      // user.
-      if (msg.count != _barinfo[i].size >> 12) {
-	if (_map_mode == MAP_MODE_UNSAFE)
-	  Logging::printf(" *** UNSAFE MAPPING OF BAR%u: POTENTIAL SECURTIY RISK ***\n", i);
-	else
-	  Logging::printf(" *** INCOMPLETE MAPPING OF BAR%u: PERFORMANCE PROBLEM ***\n", i);
-      }
+			// Rounding up BAR size to page size in unsafe mode, because
+			// the user wants to shoot himself in the foot.
+			msg.count = (barinfo.size + (_map_mode == MAP_MODE_UNSAFE ? 0xFFF : 0)) >> 12;
 
-      if (msg.count == 0) return false;
+			// Check whether something bad actually happened and warn the
+			// user.
+			if (msg.count != barinfo.size >> 12) {
+				if (_map_mode == MAP_MODE_UNSAFE)
+					Logging::printf(" *** UNSAFE MAPPING OF BAR%u: POTENTIAL SECURTIY RISK ***\n", i);
+				else
+					Logging::printf(" *** INCOMPLETE MAPPING OF BAR%u: PERFORMANCE PROBLEM ***\n", i);
+			}
 
-      unsigned msix_size = unsigned((16*_irq_count + 0xfff) & ~0xffful);
-      unsigned msix_offset = _cfgspace[1 + _msix_cap] & ~0x7;
-      if (i == _msix_bar) {
-	unsigned long offset = (msg.page << 12) - (_cfgspace[BAR0 + i] & BAR_MEM_MASK);
-	if (in_range(offset, msix_offset, msix_size)) return false;
-	if (offset < msix_offset)
-	  msg.count = msix_offset >> 12;
-	else {
-	  unsigned long shift = (msix_offset + 0xfff) & ~0xffful;
-	  msg.start_page += shift >> 12;
-	  msg.count      -= shift >> 12;
-	  msg.ptr        += shift;
+			if (msg.count == 0) return false;
+
+			auto const msix_size = unsigned((16*_irq_count + 0xfff) & ~0xffful);
+			auto const msix_offset = _cfgspace[1 + _msix_cap] & ~0x7;
+
+			if (i == _msix_bar) {
+				unsigned long offset = (msg.page << 12) - (cfgbar & BAR_MEM_MASK);
+				if (in_range(offset, msix_offset, msix_size)) return false;
+				if (offset < msix_offset)
+					msg.count = msix_offset >> 12;
+				else {
+					unsigned long shift = (msix_offset + 0xfff) & ~0xffful;
+					msg.start_page += shift >> 12;
+					msg.count      -= shift >> 12;
+					msg.ptr        += shift;
+				}
+			}
+
+			Logging::printf(" MAP %u %lx+%lx from %p size %lx page %lx %x base=%llx\n",
+			                i, msg.start_page << 12, msg.count << 12, msg.ptr,
+			                barinfo.size, msg.page, cfgbar, barinfo.base);
+
+			if (!barinfo.io) {
+				MessageHostOp msg2(MessageHostOp::OP_ATTACH_PCI_IOMEM, barinfo.base, msg.count << 12, unsigned(msg.page << 12));
+				_mb.bus_hostop.send(msg2);
+			}
+
+			return true;
+		}
+
+		return false;
 	}
-      }
-      Logging::printf(" MAP %u %lx+%lx from %p size %lx page %lx %x\n", i, msg.start_page << 12, msg.count << 12, msg.ptr, _barinfo[i].size, msg.page, _cfgspace[BAR0 + i]);
-      return true;
-    }
-    return false;
-  }
 
 
   bool  receive(MessageLegacy &msg) {
@@ -435,80 +509,97 @@ private:
     return true;
   }
 
-
-  DirectPciDevice(Motherboard &mb, unsigned hbdf, unsigned guestbdf, bool assign,
-                  bool const use_irqs=true, unsigned parent_bdf = 0,
-                  unsigned vf_no = 0, unsigned map_mode = MAP_MODE_SAFE)
-    : HostVfPci(mb.bus_hwpcicfg), _mb(mb), _hostbdf(hbdf),
-      _msix_table(0), _msix_host_table(0), _bar_count(count_bars(_hostbdf)),
-      _vf(parent_bdf != 0),
-      _map_mode(map_mode)
-  {
-
-    if (parent_bdf)
-      _hostbdf = vf_bdf(parent_bdf, vf_no);
-    _guestbdf = (guestbdf == 0) ? _hostbdf : PciHelper::find_free_bdf(mb.bus_pcicfg, guestbdf);
-    for (unsigned i=0; i < PCI_CFG_SPACE_DWORDS; i++) _cfgspace[i] = conf_read(_hostbdf, i);
-
-    MessageHostOp msg4(MessageHostOp::OP_ASSIGN_PCI, _hostbdf, parent_bdf);
-    check0(assign && !mb.bus_hostop.send(msg4), "DPCI: could not directly assign %x via iommu", _hostbdf);
-
-    unsigned long bases[HostPci::MAX_BAR];
-    unsigned long sizes[HostPci::MAX_BAR];
-    if (parent_bdf)
-      read_all_vf_bars(parent_bdf, vf_no, bases, sizes);
-    else
-      read_all_bars(_hostbdf, bases, sizes);
-
-    map_bars(bases, sizes);
-
-    if (parent_bdf) {
-      // Populate config space for VF
-      _cfgspace[0] = vf_device_id(parent_bdf);
-      Logging::printf("Our device ID is %04x.\n", _cfgspace[0]);
-      for (unsigned i = 0; i < MAX_BAR; i++)
-        _cfgspace[i + BAR0] = unsigned(bases[i]);
-    }
-
-    _msi_cap  = use_irqs ? find_cap(_hostbdf, CAP_MSI) : 0;
-    _msix_cap = use_irqs ? find_cap(_hostbdf, CAP_MSIX) : 0;
-    _irq_count = use_irqs ? 1 : 0;
-
-    if (_msi_cap)  {
-      _irq_count = 1;
-      _msi_64bit = _cfgspace[_msi_cap] & 0x800000;
-      // disable MSI
-      _cfgspace[_msi_cap] &= ~0x10000;
-    }
-    if (_msix_cap) {
-      unsigned msix_irqs = 1 + ((_cfgspace[_msix_cap] >> 16) & 0x7ff);
-      if (_irq_count < msix_irqs) _irq_count = msix_irqs;
-      _msix_table = new MsiXTableEntry[_irq_count];
-      _msix_bar  = _cfgspace[1 + _msix_cap] & 0x7;
-      _msix_host_table = reinterpret_cast<MsiXTableEntry *>(_barinfo[_msix_bar].ptr + (_cfgspace[1 + _msix_cap] & ~0x7));
-      // disable MSIX
-      _cfgspace[_msix_cap] = 0x7fffffff;
-    }
-
-    _host_irqs = new unsigned[_irq_count];
-    for (unsigned i=0; i < _irq_count; i++)
-      // XXX when do we need level?
-      _host_irqs[i] = get_gsi(mb.bus_hostop, mb.bus_acpi, _hostbdf, i, false, _msix_host_table);
-
-    mb.bus_pcicfg.add(this, DirectPciDevice::receive_static<MessagePciConfig>);
-    mb.bus_ioin.add(this,   DirectPciDevice::receive_static<MessageIOIn>);
-    mb.bus_ioout.add(this,  DirectPciDevice::receive_static<MessageIOOut>);
-    mb.bus_mem.add(this,    DirectPciDevice::receive_static<MessageMem>);
-    mb.bus_mem.add_iothread_callback(this, DirectPciDevice::claim_static<MessageMem>);
-    mb.bus_legacy.add(this, DirectPciDevice::receive_static<MessageLegacy>);
-    if (map_mode != MAP_MODE_DISABLED)
-      mb.bus_memregion.add(this, DirectPciDevice::receive_static<MessageMemRegion>);
-    mb.bus_hostirq.add(this,     DirectPciDevice::receive_static<MessageIrq>);
-    mb.bus_hostirq.add_iothread_callback(this, DirectPciDevice::claim_static<MessageIrq>);
-    mb.bus_restore.add(this,     DirectPciDevice::receive_static<MessageRestore>);
-    //mb.bus_irqnotify.add(this, DirectPciDevice::receive_static<MessageIrqNotify>);
-  }
+  DirectPciDevice(Motherboard &, unsigned, unsigned, bool,
+                  bool const use_irqs = true, unsigned parent_bdf = 0,
+                  unsigned vf_no = 0, uint8 map_mode = MAP_MODE_SAFE);
 };
+
+
+DirectPciDevice::DirectPciDevice(Motherboard    &mb,
+                                 unsigned const  hbdf,
+                                 unsigned const  guestbdf,
+                                 bool     const  assign,
+                                 bool     const  use_irqs,
+                                 unsigned const  parent_bdf,
+                                 unsigned const  vf_no,
+                                 uint8    const  map_mode)
+:
+	HostVfPci(mb.bus_hwpcicfg), _mb(mb), _hostbdf(hbdf),
+	_bar_count(count_bars(_hostbdf)),
+	_vf(parent_bdf != 0), _map_mode(map_mode)
+{
+	if (parent_bdf)
+		_hostbdf = vf_bdf(parent_bdf, vf_no);
+
+	_guestbdf = (guestbdf == 0) ? _hostbdf
+	                            : PciHelper::find_free_bdf(mb.bus_pcicfg, guestbdf);
+
+	for (auto i = 0u; i < PCI_CFG_SPACE_DWORDS; i++)
+		_cfgspace[i] = conf_read(_hostbdf, i);
+
+	MessageHostOp msg4(MessageHostOp::OP_ASSIGN_PCI, _hostbdf, parent_bdf);
+	check0(assign && !mb.bus_hostop.send(msg4), "DPCI: could not directly assign %x via iommu", _hostbdf);
+
+	unsigned long bases[HostPci::MAX_BAR];
+	unsigned long sizes[HostPci::MAX_BAR];
+
+	if (parent_bdf)
+		read_all_vf_bars(parent_bdf, vf_no, bases, sizes);
+	else
+		read_all_bars(_hostbdf, bases, sizes);
+
+	map_bars(bases, sizes);
+
+	/* populate config space for VF */
+	if (parent_bdf) {
+		_cfgspace[0] = vf_device_id(parent_bdf);
+
+		Logging::printf("Our device ID is %04x.\n", _cfgspace[0]);
+
+		for (unsigned i = 0; i < MAX_BAR; i++)
+			_cfgspace[i + BAR0] = unsigned(bases[i]);
+	}
+
+	_msi_cap   = use_irqs ? find_cap(_hostbdf, CAP_MSI) : 0;
+	_msix_cap  = use_irqs ? find_cap(_hostbdf, CAP_MSIX) : 0;
+	_irq_count = use_irqs ? 1 : 0;
+
+	if (_msi_cap)  {
+		_irq_count = 1;
+		_msi_64bit = _cfgspace[_msi_cap] & 0x800000;
+		_cfgspace[_msi_cap] &= ~0x10000; /* disable MSI */
+	}
+
+	if (_msix_cap) {
+		unsigned msix_irqs = 1 + ((_cfgspace[_msix_cap] >> 16) & 0x7ff);
+		if (_irq_count < msix_irqs) _irq_count = msix_irqs;
+		_msix_table = new MsiXTableEntry[_irq_count];
+		_msix_bar  = _cfgspace[1 + _msix_cap] & 0x7;
+		_msix_host_table = reinterpret_cast<MsiXTableEntry *>(_barinfo[_msix_bar].ptr + (_cfgspace[1 + _msix_cap] & ~0x7));
+		_cfgspace[_msix_cap] = 0x7fffffff; /* disable MSIX */
+	}
+
+	_host_irqs = new unsigned[_irq_count];
+
+	// XXX when do we need level?
+	for (auto i = 0u; i < _irq_count; i++)
+		_host_irqs[i] = get_gsi(mb.bus_hostop, mb.bus_acpi, _hostbdf, i, false, _msix_host_table);
+
+	mb.bus_pcicfg .add(this, DirectPciDevice::receive_static<MessagePciConfig>);
+	mb.bus_ioin   .add(this, DirectPciDevice::receive_static<MessageIOIn>);
+	mb.bus_ioout  .add(this, DirectPciDevice::receive_static<MessageIOOut>);
+	mb.bus_mem    .add(this, DirectPciDevice::receive_static<MessageMem>);
+	mb.bus_legacy .add(this, DirectPciDevice::receive_static<MessageLegacy>);
+	mb.bus_hostirq.add(this, DirectPciDevice::receive_static<MessageIrq>);
+	mb.bus_restore.add(this, DirectPciDevice::receive_static<MessageRestore>);
+	//mb.bus_irqnotify.add(this, DirectPciDevice::receive_static<MessageIrqNotify>);
+
+	mb.bus_mem    .add_iothread_callback(this, DirectPciDevice::claim_static<MessageMem>);
+	mb.bus_hostirq.add_iothread_callback(this, DirectPciDevice::claim_static<MessageIrq>);
+
+	if (map_mode != MAP_MODE_DISABLED)
+		mb.bus_memregion.add(this, DirectPciDevice::receive_static<MessageMemRegion>);
+}
 
 
 PARAM_HANDLER(dpci,
@@ -528,7 +619,7 @@ PARAM_HANDLER(dpci,
   Logging::printf("search_device(%lx,%lx,%lx) bdf %x \n", argv[0], argv[1], argv[2], hostbdf);
   check0(!hostbdf, "dpci device not found");
   new DirectPciDevice(mb, hostbdf, unsigned(argv[3]), argv[4], argv[5], 0, 0,
-                      unsigned((~argv[6] == 0) ? uint64(DirectPciDevice::MAP_MODE_SAFE) : argv[6]));
+                      uint8((~argv[6] == 0) ? uint64(DirectPciDevice::MAP_MODE_SAFE) : argv[6]));
 }
 
 #include "host/hostvf.h"
