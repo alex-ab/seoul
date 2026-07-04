@@ -605,12 +605,12 @@ bool Seoul::Console::receive(MessageTimeout &msg)
 
 Seoul::Console::Console(Genode::Env &env, Genode::Allocator &alloc,
                         Motherboard &mb, Gui::Area const area,
-                        Seoul::Guest_memory &guest_memory)
+                        Seoul::Vm_memory &vm_memory)
 :
 	_env(env),
 	_mb(mb),
 	_alloc(alloc),
-	_memory(guest_memory),
+	_memory(vm_memory),
 	_gui_vesa(area), _gui_non_vesa(area), _gui_non_vesa_ack(area),
 	_input_absolute(area),
 	_vga_vesa(_memory, _binary_mono_tff_start)

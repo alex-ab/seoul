@@ -38,7 +38,7 @@
 
 /* local includes */
 #include "keyboard.h"
-#include "guest_memory.h"
+#include "vm_memory.h"
 #include "gui.h"
 #include "vga_vesa.h"
 
@@ -59,7 +59,7 @@ class Seoul::Console : public StaticReceiver<Seoul::Console>
 		Genode::List<Backend_gui>  _guis  { };
 		Genode::Allocator         &_alloc;
 
-		Seoul::Guest_memory       &_memory;
+		Seoul::Vm_memory          &_memory;
 		Gui::Area  const           _gui_vesa;
 		Gui::Area                  _gui_non_vesa;
 		Gui::Area                  _gui_non_vesa_ack;
@@ -116,7 +116,7 @@ class Seoul::Console : public StaticReceiver<Seoul::Console>
 		 * Constructor
 		 */
 		Console(Genode::Env &, Genode::Allocator &, Motherboard &,
-		        Gui::Area const, Seoul::Guest_memory &);
+		        Gui::Area const, Seoul::Vm_memory &);
 
 		bool apply_msg(unsigned const id, auto const & fn)
 		{

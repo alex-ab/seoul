@@ -111,8 +111,14 @@ private:
 			// if edge: clear ds bit
 			_ds[pin] = _ds[pin] && _redir[pin * 2] & MessageApic::ICR_LEVEL;
 
+			if (pin == 5)
+				Logging::printf("---A- write_data pin=%u ds[pin]=%u\n", pin, _ds[pin]);
+
 			// unmasked - retrigger and/or notify
 			if (~_redir[pin * 2] & 0x10000) {
+				if (pin == 5)
+					Logging::printf("---B- write_data pin=%u ds[pin]=%u\n", pin, _ds[pin]);
+
 				if (_ds[pin])
 					pin_assert(pin, MessageIrq::ASSERT_NOTIFY);
 				else {
@@ -131,8 +137,11 @@ private:
 
 	void notify(unsigned pin)
 	{
-		if (!_notify[pin])
+		if (!_notify[pin]) {
+			if (pin == 5)
+				Logging::printf("drop notify 5\n");
 			return;
+		}
 
 		_notify[pin]       = false;
 		unsigned const gsi = reverse_routing(pin);
@@ -158,15 +167,26 @@ private:
 			_ds  [pin] = false;
 			_rirr[pin] = false;
 		} else {
+
 			// have we already send the message
-			if (_rirr[pin])
+			if (_rirr[pin]) {
+				if (pin == 5)
+					Logging::printf("%u ioapic irq 5 drop ?!\n", __LINE__);
+
 				return true;
+			}
+
+			if (pin == 5)
+				Logging::printf("%u ioapic irq 5\n", __LINE__);
 
 			unsigned const dst   = _redir[2*pin+1];
 			unsigned       value = _redir[2*pin];
 			bool     const level = value & 0x8000;
 
 			_notify[pin] = type == MessageIrq::ASSERT_NOTIFY;
+
+			if (pin == 5)
+				Logging::printf("%u ioapic irq 5 notify=%d level=%d value=%x if (first)=%x\n", __LINE__, _notify[pin], level, value, value & 0x10000);
 
 			if (value & 0x10000) {
 				if (level) _ds[pin] = true;

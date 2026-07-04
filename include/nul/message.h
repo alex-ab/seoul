@@ -499,6 +499,7 @@ struct MessageHostOp
       OP_ATTACH_IRQ,
       OP_NOTIFY_IRQ,
       OP_ATTACH_MSI,
+      OP_ATTACH_PCI_IOMEM,
       OP_ALLOC_IOIO_REGION,
       OP_ALLOC_IOMEM,
       OP_ALLOC_IOMEM_SMALL,

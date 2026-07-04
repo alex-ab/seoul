@@ -1,52 +1,49 @@
 /*
- * \brief  Seoul Guest memory management
- * \author Alexander Boettcher
- * \author Norman Feske
- * \author Markus Partheymueller
- * \date   2011-11-18
+ * \brief  VM memory management
  */
 
 /*
- * Copyright (C) 2011-2019 Genode Labs GmbH
- * Copyright (C) 2012 Intel Corporation
- *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
  *
- * The code is partially based on the Vancouver VMM, which is distributed
+ * The code is partially based on the Seoul VMM, which is distributed
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _GUEST_MEMORY_H_
-#define _GUEST_MEMORY_H_
+#pragma once
 
 #include <base/allocator.h>
-#include <base/sleep.h>
 #include <rm_session/connection.h>
 #include <vm_session/connection.h>
 #include <region_map/client.h>
+#include <platform_session/connection.h>
 
 namespace Seoul {
 
 	using namespace Genode;
 
-	class Guest_memory;
+	class Vm_memory;
+
+	typedef Genode::Constructible<Platform::Connection> Pci_platform;
 }
 
-class Seoul::Guest_memory
+class Seoul::Vm_memory
 {
 	private:
 
-		Env                  &_env;
-		Vm_connection        &_vm_con;
-		Rm_connection         _rm_reserve   { _env };
+		Env            &_env;
+		Vm_connection  &_vm_con;
+		Pci_platform   &_platform;
+		Rm_connection   _rm_reserve   { _env };
 
-		uint64_t       const  _guest_size;
-		size_t         const  _io_mem_size  { 1ul << 30 };
-		addr_t                _io_mem_alloc { 3 * (1ul << 30) }; /* configurable ? */
-		addr_t                _local_addr   { };
-		bool                  _io_mem_gap   { false };
-		bool           const  _verbose;
+		static constexpr auto permit_overlap = 0x1000ul;
+
+		uint64_t const  _vm_size;
+		size_t   const  _io_mem_size  { 1ul << 30 };
+		addr_t          _io_mem_alloc { 3 * (1ul << 30) }; /* configurable ? */
+		addr_t          _local_addr   { };
+		bool            _io_mem_gap   { false };
+		bool     const  _verbose;
 
 		addr_t _attach_at(Dataspace_capability const &ds, addr_t const at)
 		{
@@ -65,7 +62,7 @@ class Seoul::Guest_memory
 			addr_t backing_store { };
 
 			{
-				auto const ds = _rm_reserve.create(size_t(_guest_size + (_io_mem_gap ? _io_mem_size : 0)));
+				auto const ds = _rm_reserve.create(size_t(_vm_size + (_io_mem_gap ? _io_mem_size : 0)));
 				Region_map_client rm(ds);
 				Attached_dataspace tmp(_env.rm(), rm.dataspace());
 				backing_store = (addr_t)tmp.local_addr<void>();
@@ -90,8 +87,8 @@ class Seoul::Guest_memory
 		/*
 		 * Noncopyable
 		 */
-		Guest_memory(Guest_memory const &);
-		Guest_memory &operator = (Guest_memory const &);
+		Vm_memory(Vm_memory const &);
+		Vm_memory &operator = (Vm_memory const &);
 
 		struct Region : Genode::List<Region>::Element {
 			Genode::addr_t                _guest_addr;
@@ -132,26 +129,58 @@ class Seoul::Guest_memory
 
 	public:
 
-		/**
-		 * Constructor
-		 *
-		 * \param guest_size  number of bytes of physical RAM to be
-		 *                    used as guest-physical memory,
-		 *                    allocated from core's RAM service
-		 */
-		Guest_memory(Env &env, Allocator &alloc, Vm_connection &vm_con,
-		             addr_t const guest_size, bool const verbose)
+		Vm_memory(Env           &env,
+		          Allocator     &alloc,
+		          Vm_connection &vm_con,
+		          Pci_platform  &platform,
+		          addr_t const vm_size,
+		          bool const verbose)
 		:
-			_env(env), _vm_con(vm_con), _guest_size(guest_size),
-			_verbose(verbose)
+			_env(env), _vm_con(vm_con), _platform(platform),
+			_vm_size(vm_size), _verbose(verbose)
 		{
-			auto const pg_1g = 1ul << 30;
-			auto const pg_4m = 1ul << 22;
+			bool const passthrough = _platform.constructed();
 
-			auto max_offset = guest_size;
+			auto const pg_1g  = 1ul << 30ull;
+			auto const pg_64m = 1ul << 26ull;
+			auto const pg_4m  = 1ul << 22ull;
 
-			for (auto offset = 0ul, ds_size = (guest_size > pg_1g) ? pg_1g : guest_size;
-			     offset < max_offset;)
+			auto max_offset = _vm_size;
+			auto offset     = 0ull;
+
+			auto step_size = [&](auto const v_size) {
+#if 0
+				if (passthrough)
+					return (v_size > pg_64m) ? pg_64m : v_size;
+				else
+#endif
+				auto size = (v_size > pg_1g) ? pg_1g : v_size;
+
+				{
+					if (size < pg_4m) return size;
+
+					auto unaligned_4m = offset & (pg_4m - 1);
+
+					if (unaligned_4m)
+						return (size - unaligned_4m) & (pg_4m - 1);
+				}
+
+				{
+					if (size < pg_1g) return size;
+
+					auto unaligned_1g = offset & (pg_1g - 1);
+					if (unaligned_1g)
+						return size - unaligned_1g;
+				}
+
+				return size;
+			};
+
+			/* DMA address 0 is denied by Genode platform driver XXX */
+			if (passthrough)
+				offset = permit_overlap;
+
+			for (auto ds_size = step_size(_vm_size); offset < max_offset;)
 			{
 				/* cut out io_mem region from normal memory */
 				if (offset < _io_mem_alloc + _io_mem_size) {
@@ -169,7 +198,19 @@ class Seoul::Guest_memory
 				}
 
 				try {
-					auto const ds = env.ram().alloc(ds_size);
+					error("--- ", Hex(offset), "+", Hex(ds_size), " -> ", Hex(offset + ds_size));
+					auto const ds = passthrough
+					              ? _platform->alloc_dma_buffer_at(ds_size, Cache::CACHED, offset)
+					              : _env.ram().alloc(ds_size);
+
+					if (passthrough) {
+						auto dma_addr = _platform->dma_addr(ds);
+						if (dma_addr != offset) {
+							error("memory not usable for DMA ", Hex(dma_addr),
+							      " vs ", Hex(offset));
+							Logging::panic("passthrough failed");
+						}
+					}
 
 					/* register ds for VM region */
 					bool ok = add_region(alloc, offset, 0,
@@ -180,7 +221,7 @@ class Seoul::Guest_memory
 					offset += ds_size;
 
 					ds_size = max_offset - offset;
-					ds_size = ds_size > pg_1g ? pg_1g : ds_size;
+					ds_size = step_size(ds_size);
 
 				} catch (Genode::Ram_allocator::Denied) {
 
@@ -198,6 +239,21 @@ class Seoul::Guest_memory
 
 					continue;
 				}
+			}
+
+			/*
+			 * DMA address 0 is denied by Genode platform driver XXX
+			 *  attach nevertheless a range, but it won't be usable for DMA
+			 */
+			if (passthrough) {
+				offset = 0;
+				auto const ds_size = 4096;
+				/* alloc_dma_buffer_at would be required */
+				//auto const ds = _platform->alloc_dma_buffer_at(ds_size, Cache::CACHED, offset);
+				auto const ds = _env.ram().alloc(ds_size);
+				bool const ok = add_region(alloc, offset, 0, ds, ds_size);
+				if (!ok)
+					Logging::panic("guest memory allocation failed at 0");
 			}
 
 			/* reserve late, due to add_region using 'new (alloc)' above */
@@ -228,7 +284,23 @@ class Seoul::Guest_memory
 
 		size_t backing_store_size() const
 		{
-			return size_t(_guest_size + (_io_mem_gap ? _io_mem_size : 0));
+			return size_t(_vm_size + (_io_mem_gap ? _io_mem_size : 0));
+		}
+
+		bool remove_region(addr_t const guest_addr, auto const &fn)
+		{
+			for (auto r = _regions.first(); r; r = r->next()) {
+				if (r->_guest_addr != guest_addr)
+					continue;
+
+				_regions.remove(r);
+
+				fn(r);
+
+				return true;
+			}
+
+			return false;
 		}
 
 		bool add_region(Allocator    &alloc,
@@ -244,18 +316,18 @@ class Seoul::Guest_memory
 				if (!region.overlap(guest_addr, ds_size))
 					return;
 
-				if (_verbose)
+				if (_verbose || region._guest_addr > permit_overlap)
 					warning("overlapping region added: ",
 					        Hex(guest_addr), "+", Hex(ds_size),
 					        " conflicts with ",
 					        Hex(region._guest_addr), "+", Hex(region._ds_size));
 
-				if (region._guest_addr != 0)
+				if (region._guest_addr > permit_overlap)
 					Genode::sleep_forever();
 			});
 
 			if (_verbose)
-				log("guest_memory: add_region ", Hex(guest_addr), "+", Hex(ds_size));
+				log("vm_memory: add_region ", Hex(guest_addr), "+", Hex(ds_size));
 
 			_regions.insert(new (alloc) Region(guest_addr, local_addr, ds, ds_size));
 
@@ -336,5 +408,3 @@ class Seoul::Guest_memory
 			return io_mem;
 		}
 };
-
-#endif /* _GUEST_MEMORY_H_ */
