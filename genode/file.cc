@@ -63,20 +63,24 @@ void Seoul::Filesystem::_open_file(MessageFs &msg)
 			          : (!msg.readable && msg.writeable) ? WRITE_ONLY
 			          : READ_ONLY;
 			try {
-				if (file.handle.value) {
-					warning(" file already open -- close and reopen");
-					fs.close(file.handle);
-				}
 
-				file.handle = fs.file(dir.handle, file.name.string(), mode,
-				                      false /* no create */);
+				with_open_dir(msg, dir, [&] {
 
-				msg.fh = file.handle.value;
+					if (file.handle.value) {
+						warning(" file already open -- close and reopen");
+						fs.close(file.handle);
+					}
 
-				if (!msg.fh) {
-					error(" File::_open_file: failed ", file.name);
-					msg.fail();
-				}
+					file.handle = fs.file(dir.handle, file.name.string(), mode,
+					                      false /* no create */);
+
+					msg.fh = file.handle.value;
+
+					if (!msg.fh) {
+						error(" File::_open_file: failed ", file.name);
+						msg.fail();
+					}
+				});
 			} catch (...) {
 				error(" File::_open_file: failed due to exception ", file.name);
 				msg.fail();
