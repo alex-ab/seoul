@@ -126,6 +126,8 @@ void Seoul::Filesystem::_read_file(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
+	error(" _read file");
+
 	_read_async(msg, _queued_file_read, _read_file_pending);
 }
 
@@ -401,6 +403,8 @@ void Seoul::Filesystem::_make_dir(MessageFs &msg)
 			auto entry = new (heap) Avl_dir(status.inode, g_path);
 			_dirs.insert(entry);
 
+			error(__func__, " ", name, " msg.nodeid=", msg.nodeid, " dir nodeid=", status.inode);
+
 			msg.nodeid = status.inode;
 			msg.add_status(fh.value, status.size,
 			               status.modification_time.ms_since_1970,
@@ -499,6 +503,8 @@ void Seoul::Filesystem::_forget(MessageFs const &msg)
 
 	bool match = false;
 
+	error(" _forget");
+
 	with_file_entry(msg.nodeid, [&](auto &entry) {
 		match = true;
 		entry.with_file([&](auto &file) {
@@ -594,6 +600,8 @@ void Seoul::Filesystem::_create(MessageFs &msg)
 				file.handle     = fh;
 				file.name       = name;
 				file.dir_nodeid = msg.nodeid;
+
+				error(__func__, " ", name, " dir_nodedi=", file.dir_nodeid, " file.nodeid=", status.inode);
 			});
 
 			_files.insert(entry);
@@ -704,7 +712,7 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 	Cstring cpath (reinterpret_cast<char const *>(msg.buffer.start),
 	               mword(msg.buffer.size));
 
-	bool verbose = false;
+	bool verbose = true;
 
 	with_dir(msg.nodeid, [&](auto &parent_dir) {
 
@@ -764,8 +772,10 @@ void Seoul::Filesystem::_lookup(MessageFs &msg)
 						    "' -> nodeid=", status.inode);
 
 					with_file(status.inode, [&](auto &file) {
+						error("close h ", status.inode);
 						fs.close(h);
 					}, [&]() {
+						error("new entry ", msg.nodeid);
 						auto entry = new (heap) Avl_file(status.inode);
 						entry->with_file([&](auto &file) {
 							file.name       = cpath;
@@ -1211,6 +1221,28 @@ bool Seoul::Filesystem::receive(MessageFs &msg)
 {
 	if (fs_id != msg.fs_id)
 		return false;
+
+	error(__func__, " ", unsigned(msg.type),
+	      msg.type == MessageFs::OPEN_DIR   ? "open_dir " : "",
+	      msg.type == MessageFs::READ_DIR   ? "read_dir " : "",
+	      msg.type == MessageFs::CLOSE_DIR  ? "close_dir " : "",
+	      msg.type == MessageFs::MAKE_DIR   ? "make_dir " : "",
+	      msg.type == MessageFs::REMOVE_DIR ? "remove_dir " : "",
+	      msg.type == MessageFs::OPEN_FILE  ? "open_file " : "",
+	      msg.type == MessageFs::READ_FILE  ? "read_file " : "",
+	      msg.type == MessageFs::WRITE_FILE ? "write_file " : "",
+	      msg.type == MessageFs::CLOSE_FILE ? "close_file " : "",
+	      msg.type == MessageFs::RENAME     ? "rename " : "",
+	      msg.type == MessageFs::SYMLINK    ? "symlink " : "",
+	      msg.type == MessageFs::READLINK   ? "readlink " : "",
+	      msg.type == MessageFs::CREATE     ? "create " : "",
+	      msg.type == MessageFs::FORGET     ? "forget " : "",
+	      msg.type == MessageFs::DESTROY    ? "destroy " : "",
+	      msg.type == MessageFs::GET_ATTR   ? "get_attr " : "",
+	      msg.type == MessageFs::SET_ATTR   ? "set_attr " : "",
+	      msg.type == MessageFs::LOOKUP     ? "lookup " : "",
+	      msg.type == MessageFs::UNLINK     ? "unlink " : "",
+	      msg.type == MessageFs::SYNC       ? "sync " : "");
 
 	switch (msg.type) {
 	case MessageFs::OPEN_DIR   : _open_dir  (msg); break;
