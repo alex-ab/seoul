@@ -234,6 +234,21 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 				fn();
 		}
 
+		void with_open_dir_tmp(MessageFs const &msg, auto const &fn, auto const &fn_unknown)
+		{
+			with_dir(msg.nodeid, [&](auto &entry) {
+				if (msg.nodeid > root_nodeid && !entry.handle.value) {
+
+					Dir_handle h { fs.dir(entry.path.string(), false) };
+
+					fn(h);
+
+					fs.close(h);
+				} else
+					fn(entry.handle);
+			}, fn_unknown);
+		}
+
 		void with_open_dir_tmp(auto &entry, auto const &fn)
 		{
 			if (!entry.handle.value) {

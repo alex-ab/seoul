@@ -1,5 +1,5 @@
 /*
- * \brief  VMM MessageFile to Genode file-system session adpater
+ * \brief  VMM MessageFile to Genode file-system session adapter
  * \author Alexander Boettcher
  */
 
@@ -57,42 +57,40 @@ void Seoul::Filesystem::_open_file(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	with_file(msg.nodeid, [&](auto &file) {
-		with_dir(file.dir_nodeid, [&](auto &dir) {
-			Mode mode = ( msg.readable && msg.writeable) ? READ_WRITE
-			          : (!msg.readable && msg.writeable) ? WRITE_ONLY
-			          : READ_ONLY;
-			try {
+	try {
+		with_file(msg.nodeid, [&](auto &file) {
+			MessageFs msg_dir_tmp(MessageFs::OPEN_DIR, msg.fs_id, file.dir_nodeid);
+			with_open_dir_tmp(msg_dir_tmp, [&](auto const dir_handle) {
+				Mode mode = ( msg.readable && msg.writeable) ? READ_WRITE
+				          : (!msg.readable && msg.writeable) ? WRITE_ONLY
+				          : READ_ONLY;
 
-				with_open_dir(msg, dir, [&] {
+				if (file.handle.value) {
+					warning(" file already open -- close and reopen");
+					fs.close(file.handle);
+				}
 
-					if (file.handle.value) {
-						warning(" file already open -- close and reopen");
-						fs.close(file.handle);
-					}
+				file.handle = fs.file(dir_handle, file.name.string(), mode,
+				                      false /* no create */);
 
-					file.handle = fs.file(dir.handle, file.name.string(), mode,
-					                      false /* no create */);
+				msg.fh = file.handle.value;
 
-					msg.fh = file.handle.value;
-
-					if (!msg.fh) {
-						error(" File::_open_file: failed ", file.name);
-						msg.fail();
-					}
-				});
-			} catch (...) {
-				error(" File::_open_file: failed due to exception ", file.name);
+				if (!msg.fh) {
+					error(" File::_open_file: failed ", file.name);
+					msg.fail();
+				}
+			}, [&] {
+				error(" File::_open_file: unknown dir nodeid");
 				msg.fail();
-			}
+			});
 		}, [&] {
-			error(" File::_open_file: unknown dir nodeid");
+			error(" File::_open_file: unknown file nodeid");
 			msg.fail();
 		});
-	}, [&] {
-		error(" File::_open_file: unknown file nodeid");
+	} catch (...) {
+		error(" File::_open_file: failed due to exception");
 		msg.fail();
-	});
+	}
 }
 
 
@@ -229,8 +227,12 @@ void Seoul::Filesystem::_remove_dir(MessageFs &msg)
 				}, [&]() { error(" - File::_remove_dir - unexpected close"); });
 			}
 
-			fs.unlink(parent_dir.handle, name.string());
-
+			with_open_dir_tmp(msg, [&](auto const dir_handle) {
+				fs.unlink(dir_handle, name.string());
+			}, [&]{
+				msg.fail();
+				error(" File::_remove_dir: failed - unknown parent dir");
+			});
 		} catch (...) {
 			msg.fail();
 			error(" File::_remove_dir: failed");
@@ -252,7 +254,9 @@ void Seoul::Filesystem::_rename(MessageFs &msg)
 	               mword(msg.buffer.size - src.length())));
 
 	auto const dir_nodeid_src = msg.nodeid;
-	auto const dir_nodeid_dst = msg.fh;
+	auto const dir_nodeid_dst = msg.fh; /* misuse for dir dst nodeid */
+
+	MessageFs msg_dst(msg.type, msg.fs_id, dir_nodeid_dst);
 
 	if (verbose)
 		log(" _rename: ", dir_nodeid_src, "->", dir_nodeid_dst,
@@ -260,26 +264,23 @@ void Seoul::Filesystem::_rename(MessageFs &msg)
 
 	Genode::Mutex::Guard guard(mutex);
 
-	with_dir(dir_nodeid_src, [&](auto &dir_src) {
-		with_dir(dir_nodeid_dst, [&](auto &dir_dst) {
+	try {
+		with_open_dir_tmp(msg, [&](auto const src_handle) {
+			with_open_dir_tmp(msg_dst, [&](auto const dst_handle) {
 
-			Dir_handle from = dir_src.handle;
-			Dir_handle to   = dir_dst.handle;
+				uint64_t src_key = 0;
+				uint64_t dst_key = 0;
 
-			uint64_t src_key = 0;
-			uint64_t dst_key = 0;
-
-			with_each_file([&](auto &f) {
-				f.with_file([&](auto &file) {
-					if (!src_key && file.dir_nodeid == dir_nodeid_src && file.name == src)
-						src_key = f.key();
-					if (!dst_key && file.dir_nodeid == dir_nodeid_dst && file.name == dst)
-						dst_key = f.key();
+				with_each_file([&](auto &f) {
+					f.with_file([&](auto &file) {
+						if (!src_key && file.dir_nodeid == dir_nodeid_src && file.name == src)
+							src_key = f.key();
+						if (!dst_key && file.dir_nodeid == dir_nodeid_dst && file.name == dst)
+							dst_key = f.key();
+					});
 				});
-			});
 
-			try {
-				fs.move(from, src.string(), to, dst.string());
+				fs.move(src_handle, src.string(), dst_handle, dst.string());
 
 				if (src_key) {
 					with_file_entry(src_key, [&](auto &entry) {
@@ -302,12 +303,12 @@ void Seoul::Filesystem::_rename(MessageFs &msg)
 						destroy(heap, &entry);
 					}, [&]() { error(" File::_rename - unexpected rename dst issue"); });
 				}
-			} catch (...) {
-				msg.fail();
-				error(" File::_rename: failed - exception");
-			}
+			}, [&] { msg.fail(); });
 		}, [&] { msg.fail(); });
-	}, [&] { msg.fail(); });
+	} catch (...) {
+		msg.fail();
+		error(" File::_rename: failed - exception");
+	}
 
 	if (!msg.ok())
 		error(" File::_rename failed: ", dir_nodeid_src, "->", dir_nodeid_dst,
@@ -345,10 +346,10 @@ void Seoul::Filesystem::_sym_link(MessageFs &msg)
 		create = false;
 	}
 
-	with_dir(dir_nodeid_dst, [&](auto &dir_dst) {
+	try {
+		with_open_dir_tmp(msg, [&](auto &dir_handle) {
 
-		try {
-			auto const handle = fs.symlink(dir_dst.handle, dst.string(), create);
+			auto const handle = fs.symlink(dir_handle, dst.string(), create);
 
 			File_handle fh { handle.value };
 			bool ok = _queue_write(fh, uintptr_t(src.string()), src.length(), 0);
@@ -360,7 +361,7 @@ void Seoul::Filesystem::_sym_link(MessageFs &msg)
 				fs.close(fh);
 			} else {
 				/* sets msg.buffer.set to done by invoking add_status */
-				_lookup_sym(msg, dir_dst.handle, dst.string(), dst.length(), fh.value);
+				_lookup_sym(msg, dir_handle, dst.string(), dst.length(), fh.value);
 
 				auto entry = new (heap) Avl_file(msg.nodeid);
 				entry->with_file([&](auto &file) {
@@ -371,17 +372,15 @@ void Seoul::Filesystem::_sym_link(MessageFs &msg)
 
 				_files.insert(entry);
 			}
-
 			tx.wakeup();
-
-		} catch (...) {
+		}, [&] {
+			error(" File::_sym_link: unknown dir id ", dir_nodeid_dst);
 			msg.fail();
-			error(" File::_sym_link: failed - exception");
-		}
-	}, [&] {
-		error(" File::_sym_link: unknown dir id ", dir_nodeid_dst);
+		});
+	} catch (...) {
 		msg.fail();
-	});
+		error(" File::_sym_link: failed - exception");
+	}
 }
 
 
@@ -515,6 +514,9 @@ void Seoul::Filesystem::_forget(MessageFs const &msg)
 
 	with_dir_entry(msg.nodeid, [&](auto &entry) {
 		entry.with_dir([&](auto &dir) {
+			if (root.value == dir.handle.value)
+				return;
+
 			if (dir.handle.value)
 				fs.close(dir.handle);
 		});
@@ -574,16 +576,16 @@ void Seoul::Filesystem::_create(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
 
-	with_dir(msg.nodeid, [&](auto &dir) {
-		String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
-		                mword(msg.buffer.size)));
+	try {
+		with_open_dir_tmp(msg, [&](auto const dir_handle) {
+			String_dir name(Cstring(reinterpret_cast<char *>(msg.buffer.start),
+			                mword(msg.buffer.size)));
 
-		Mode mode = ( msg.readable && msg.writeable) ? READ_WRITE
-		          : (!msg.readable && msg.writeable) ? WRITE_ONLY
-		          : READ_ONLY;
+			Mode mode = ( msg.readable && msg.writeable) ? READ_WRITE
+			          : (!msg.readable && msg.writeable) ? WRITE_ONLY
+			          : READ_ONLY;
 
-		try {
-			auto fh = fs.file(dir.handle, name.string(), mode, true /* create */);
+			auto fh = fs.file(dir_handle, name.string(), mode, true /* create */);
 
 			Status status = fs.status(fh);
 
@@ -604,14 +606,14 @@ void Seoul::Filesystem::_create(MessageFs &msg)
 			msg.writeable  = status.rwx.writeable;
 			msg.readable   = status.rwx.readable;
 			msg.executable = status.rwx.executable;
-		} catch (...) {
+		}, [&] {
+			error(" File::_create: unknown dir id ", msg.nodeid);
 			msg.fail();
-			error(" File::_create: failed due to exception");
-		}
-	}, [&] {
-		error(" File::_create: unknown dir id ", msg.nodeid);
+		});
+	} catch (...) {
 		msg.fail();
-	});
+		error(" File::_create: failed due to exception");
+	}
 }
 
 
@@ -643,7 +645,12 @@ void Seoul::Filesystem::_unlink(MessageFs &msg)
 				}, [&]() { error(" File::_unlink - unexpected unlink issue"); });
 			}
 
-			fs.unlink(parent_dir.handle, name.string());
+			with_open_dir_tmp(msg, [&](auto const dir_handle) {
+				fs.unlink(dir_handle, name.string());
+			}, [&] {
+				msg.fail();
+				error(" File::_unlink: failed due parent open dir failure");
+			});
 
 		} catch (...) {
 			msg.fail();
@@ -850,10 +857,10 @@ void Seoul::Filesystem::_get_attr(MessageFs &msg)
 
 	bool try_file = false;
 
-	with_dir(msg.nodeid, [&](auto &dir) {
+	with_dir(msg.nodeid, [&](auto &) {
 		try {
-			with_open_dir(msg, dir, [&]() {
-				Status status = fs.status(dir.handle);
+			with_open_dir_tmp(msg, [&](auto const dir_handle) {
+				Status status = fs.status(dir_handle);
 
 				msg.add_status(status.inode, status.size,
 				               status.modification_time.ms_since_1970,
@@ -862,25 +869,23 @@ void Seoul::Filesystem::_get_attr(MessageFs &msg)
 				msg.writeable  = status.rwx.writeable;
 				msg.readable   = status.rwx.readable;
 				msg.executable = status.rwx.executable;
-
-			});
+			}, [&]() { try_file = true; });
 		} catch(...) {
 			msg.fail();
 			error(" File::_get_attr: failed due to exception");
 		}
-	}, [&]() {
-		try_file = true;
-	});
+	}, [&]() { try_file = true; });
 
 	if (!try_file)
 		return;
 
-	with_file(msg.nodeid, [&](auto &file) {
-		with_dir(file.dir_nodeid, [&](auto &dir) {
-			try {
+	try {
+		with_file(msg.nodeid, [&](auto &file) {
+			MessageFs msg_dir_tmp(MessageFs::OPEN_DIR, msg.fs_id, file.dir_nodeid);
+			with_open_dir_tmp(msg_dir_tmp, [&](auto const dir_handle) {
 				File_handle h = file.handle;
 				if (!file.handle.value)
-					h = fs.file(dir.handle, file.name.string(), READ_ONLY,
+					h = fs.file(dir_handle, file.name.string(), READ_ONLY,
 					            false /* no create */);
 
 				Status status = fs.status(h);
@@ -895,18 +900,18 @@ void Seoul::Filesystem::_get_attr(MessageFs &msg)
 
 				if (!file.handle.value)
 					fs.close(h);
-			} catch(...) {
+			}, [&]() {
+				error(" File::_get_attr: unknown dir nodeid ", msg.nodeid);
 				msg.fail();
-				error(" File::_get_attr: file exception");
-			}
+			});
 		}, [&]() {
-			error(" File::_get_attr: unknown dir nodeid ", msg.nodeid);
+			error(" _get_attr: unknown file nodeid ", msg.nodeid);
 			msg.fail();
 		});
-	}, [&]() {
-		error(" _get_attr: unknown file nodeid ", msg.nodeid);
+	} catch(...) {
 		msg.fail();
-	});
+		error(" File::_get_attr: file exception");
+	}
 }
 
 
@@ -916,7 +921,7 @@ void Seoul::Filesystem::_set_attr(MessageFs &msg)
 
 	bool try_file = false;
 
-	with_dir(msg.nodeid, [&](auto &entry) {
+	with_dir(msg.nodeid, [&](auto &) {
 		try {
 			warning(" File::_set_attr nodeid=", msg.nodeid, " not implemented");
 		} catch(...) {
@@ -937,9 +942,20 @@ void Seoul::Filesystem::_set_attr(MessageFs &msg)
 
 				auto h = file.handle;
 
-				if (!file.handle.value)
-					h = fs.file(dir.handle, file.name.string(), READ_ONLY,
-					            false /* no create */);
+				if (!file.handle.value) {
+					MessageFs msg_dir_tmp(MessageFs::OPEN_DIR, msg.fs_id, file.dir_nodeid);
+					with_open_dir_tmp(msg_dir_tmp, [&](auto const dir_handle) {
+						h = fs.file(dir_handle, file.name.string(), READ_ONLY,
+						            false /* no create */);
+					}, [&]() {
+						msg.fail();
+						error(" File::_set_attr: open parent dir failed");
+						h.value = 0;
+					});
+
+					if (!h.value)
+						return;
+				}
 
 				Status status = fs.status(h);
 
