@@ -26,6 +26,8 @@ namespace Seoul {
 	class Avl_dir;
 	class Avl_file;
 
+	template <typename> class Avl;
+
 	using namespace Genode;
 	using namespace File_system;
 
@@ -33,6 +35,21 @@ namespace Seoul {
 	typedef File_system::Session           Session;
 	typedef String<File_system::MAX_PATH_LEN> String_dir;
 }
+
+
+template <typename T>
+class Seoul::Avl : public Avl_tree<T>
+{
+	public:
+
+		bool apply_until_true(auto const &fn) const
+		{
+			if (auto f = Avl_tree<T>::first())
+				return f->apply_until_true(fn);
+
+			return false;
+		}
+};
 
 
 class Seoul::Avl_dir : public Genode::Avl_node<Seoul::Avl_dir>
@@ -57,6 +74,8 @@ class Seoul::Avl_dir : public Genode::Avl_node<Seoul::Avl_dir>
 		Avl_dir(uint64_t key, String_dir &path)
 		: _key(key), _dir { .path = path } { }
 
+		auto key() const { return _key; }
+
 		bool higher(Avl_dir *e) const { return e->_key > _key; }
 
 		void with_entry(uint64_t key, auto const &fn, auto const &fn_error)
@@ -75,7 +94,22 @@ class Seoul::Avl_dir : public Genode::Avl_node<Seoul::Avl_dir>
 		void with_dir(auto const &fn)       { fn(_dir); }
 		void with_dir(auto const &fn) const { fn(_dir); }
 
-		auto key() const { return _key; }
+		bool apply_until_true(auto const &fn) const
+		{
+			typedef Seoul::Avl_dir NT;
+
+			if (NT * l = child(Avl_node<NT>::LEFT))
+				if (l->apply_until_true(fn)) return true;
+
+			if (fn(*static_cast<NT const *>(this)))
+				return true;
+
+			if (NT * r = child(Avl_node<NT>::RIGHT))
+				if (r->apply_until_true(fn))
+					return true;
+
+			return false;
+		}
 };
 
 
@@ -120,6 +154,23 @@ class Seoul::Avl_file : public Genode::Avl_node<Seoul::Avl_file>
 
 		void with_file(auto const &fn)       { fn(_entry); }
 		void with_file(auto const &fn) const { fn(_entry); }
+
+		bool apply_until_true(auto const &fn) const
+		{
+			typedef Seoul::Avl_file NT;
+
+			if (NT * l = child(Avl_node<NT>::LEFT))
+				if (l->apply_until_true(fn)) return true;
+
+			if (fn(*static_cast<NT const *>(this)))
+				return true;
+
+			if (NT * r = child(Avl_node<NT>::RIGHT))
+				if (r->apply_until_true(fn))
+					return true;
+
+			return false;
+		}
 };
 
 
@@ -137,12 +188,13 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 
 		Genode::Mutex            mutex { };
 
-		unsigned const           fs_id;
+		unsigned const  _fs_id;
+		bool            _wrap { };
+		uint64_t        _nodeid_counter { };
+		uint64_t const  _root_nodeid;
 
-		unsigned const           root_nodeid { 1 }; /* XXX ever the case ? */
-
-		Avl_tree<Avl_file> _files     { };
-		Avl_tree<Avl_dir>  _dirs      { };
+		Avl<Avl_file>  _files     { };
+		Avl<Avl_dir>   _dirs      { };
 
 		Signal_handler<Filesystem> _handler { env.ep(), *this, &Filesystem::_handle_submit };
 
@@ -172,8 +224,8 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 		void _remove_dir(MessageFs &);
 		void _close_dir (MessageFs &);
 
-		void _lookup_sym(MessageFs &, Dir_handle, char const *, size_t,
-		                 unsigned long sym_handle = 0ul);
+		void _lookup_sym(MessageFs &, Dir_handle, String_dir const &,
+		                 char const *, size_t, unsigned long sym_handle = 0ul);
 
 		bool _handle_read_dir (Packet &);
 
@@ -221,9 +273,40 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			return ok;
 		}
 
+		uint64_t new_nodeid()
+		{
+			while (true) {
+				uint64_t nodeid = _nodeid_counter++;
+
+				if (nodeid == _root_nodeid) continue;
+				if (!nodeid) { log("nodeid wrapped"); _wrap = true; continue; }
+
+				if (!_wrap) return nodeid;
+
+				uint64_t cnt { };
+
+				if (_dirs.apply_until_true([&](auto const &d) {
+					cnt ++;
+					return !!(nodeid == d.key());
+				}))
+					continue;
+
+				if (_files.apply_until_true([&](auto const &f) {
+					cnt ++;
+					return !!(nodeid == f.key());
+				}))
+					continue;
+
+				if (cnt >= 4096)
+					warning("file - potential performance issues");
+
+				return nodeid;
+			}
+		}
+
 		void with_open_dir(MessageFs const &msg, auto &entry, auto const &fn)
 		{
-			if (msg.nodeid > root_nodeid && !entry.handle.value) {
+			if (msg.nodeid > _root_nodeid && !entry.handle.value) {
 
 				Dir_handle h { fs.dir(entry.path.string(), false) };
 
@@ -237,15 +320,15 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 		void with_open_dir_tmp(MessageFs const &msg, auto const &fn, auto const &fn_unknown)
 		{
 			with_dir(msg.nodeid, [&](auto &entry) {
-				if (msg.nodeid > root_nodeid && !entry.handle.value) {
+				if (msg.nodeid > _root_nodeid && !entry.handle.value) {
 
 					Dir_handle h { fs.dir(entry.path.string(), false) };
 
-					fn(h);
+					fn(h, entry);
 
 					fs.close(h);
 				} else
-					fn(entry.handle);
+					fn(entry.handle, entry);
 			}, fn_unknown);
 		}
 
@@ -302,8 +385,10 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			}, fn_unknown);
 		}
 
-		void with_each_dir (auto const &fn) const { _dirs .for_each(fn); }
-		void with_each_file(auto const &fn) const { _files.for_each(fn); }
+		bool apply_dir_until_true(auto const &fn) const {
+			return _dirs.apply_until_true(fn); }
+		bool apply_file_until_true(auto const &fn) const {
+			return _files.apply_until_true(fn); }
 
 		unsigned _queue_read_dir(Dir_handle const &dir_handle,
 		                         unsigned   const  num_entries,
@@ -492,7 +577,7 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			with_file(msg.nodeid, [&](auto &file) {
 				active = _queue_read(file.handle, mword(msg.buffer.size), msg.buffer.offset);
 
-				obj.construct(fs_id, msg.nodeid, msg);
+				obj.construct(_fs_id, msg.nodeid, msg);
 
 				if (!active) {
 					msg.buffer.offset = 0; /* read delayed - info for model */
@@ -517,30 +602,57 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 			});
 		}
 
+		uint64_t lookup_dir(auto const &msg, String_dir const &name)
+		{
+			uint64_t nodeid { };
+
+			with_dir(msg.nodeid, [&](auto &parent_dir) {
+				String_dir g_path { parent_dir.path, "/", name };
+
+				apply_dir_until_true([&](auto &d) {
+					d.with_dir([&](auto &dir) {
+
+						if (dir.path == g_path)
+							nodeid = d.key();
+					});
+
+					return !!nodeid;
+				});
+			}, [&] { /* reflected as invalid node id */ });
+
+			return nodeid;
+		}
+
+		uint64_t lookup_file(auto const &msg, String_dir const &name) const
+		{
+			uint64_t nodeid { };
+
+			apply_file_until_true([&](auto &f) {
+				f.with_file([&](auto &file) {
+					if (file.dir_nodeid != msg.nodeid)
+						return;
+
+					if (file.name == name)
+						nodeid = f.key();
+				});
+
+				return !!nodeid;
+			});
+
+			return nodeid;
+		}
+
 		void _add_root()
 		{
 			String_dir p { "" };
-			auto e = new (heap) Avl_dir(root_nodeid, p);
+			auto e = new (heap) Avl_dir(_root_nodeid, p);
 			e->with_dir([&](auto &dir) { dir.handle = root; });
 			_dirs.insert(e);
 		}
 
 	public:
 
-		Filesystem(Env &env, Motherboard &mb, unsigned fsid)
-		: mb(mb), env(env), fs_id(fsid)
-		{
-			if (root.value != 0) {
-				error("Filesystem offline - unexpected state");
-				return;
-			}
-
-			fs.sigh(_handler);
-
-			mb.bus_fs.add(this, receive_static<MessageFs>);
-
-			_add_root();
-		}
+		Filesystem(Env &env, Motherboard &mb, unsigned fsid);
 
 		bool receive(MessageFs &);
 };
