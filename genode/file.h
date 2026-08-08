@@ -227,6 +227,8 @@ class Seoul::Filesystem : public StaticReceiver<Filesystem>
 		void _lookup_sym(MessageFs &, Dir_handle, String_dir const &,
 		                 char const *, size_t, unsigned long sym_handle = 0ul);
 
+		void _populate_status_dir(MessageFs &);
+
 		bool _handle_read_dir (Packet &);
 
 		enum { MAX_PACKETS = 64 };

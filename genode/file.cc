@@ -715,6 +715,25 @@ void Seoul::Filesystem::_lookup_sym(MessageFs           &msg,
 }
 
 
+void Seoul::Filesystem::_populate_status_dir(MessageFs &msg)
+{
+	try {
+		with_open_dir_tmp(msg, [&](auto const dir_handle, auto &) {
+			Status status = fs.status(dir_handle);
+
+			msg.add_status(msg.nodeid, status.size,
+			               status.modification_time.ms_since_1970,
+			               status.directory(), status.symlink());
+
+			msg.writeable  = status.rwx.writeable;
+			msg.readable   = status.rwx.readable;
+			msg.executable = status.rwx.executable;
+
+		}, [&]() { });
+	} catch (...) { }
+}
+
+
 void Seoul::Filesystem::_lookup(MessageFs &msg)
 {
 	Genode::Mutex::Guard guard(mutex);
@@ -876,22 +895,9 @@ void Seoul::Filesystem::_get_attr(MessageFs &msg)
 	bool try_file = false;
 
 	with_dir(msg.nodeid, [&](auto &) {
-		try {
-			with_open_dir_tmp(msg, [&](auto const dir_handle, auto &) {
-				Status status = fs.status(dir_handle);
-
-				msg.add_status(msg.nodeid, status.size,
-				               status.modification_time.ms_since_1970,
-				               status.directory(), status.symlink());
-
-				msg.writeable  = status.rwx.writeable;
-				msg.readable   = status.rwx.readable;
-				msg.executable = status.rwx.executable;
-			}, [&]() { try_file = true; });
-		} catch(...) {
-			msg.fail();
+		_populate_status_dir(msg);
+		if (!msg.ok())
 			error(" File::_get_attr: failed due to exception");
-		}
 	}, [&]() { try_file = true; });
 
 	if (!try_file)
@@ -940,13 +946,11 @@ void Seoul::Filesystem::_set_attr(MessageFs &msg)
 	bool try_file = false;
 
 	with_dir(msg.nodeid, [&](auto &) {
-		try {
-			warning(" File::_set_attr nodeid=", msg.nodeid, " not implemented");
-		} catch(...) {
-			msg.fail();
-			error(" File::_set_attr: due to exception - dir");
-		}
 
+		_populate_status_dir(msg);
+
+		if (!msg.ok())
+			error(" File::_set_attr: due to exception - dir");
 	}, [&]() { try_file = true; });
 
 	if (!try_file)
