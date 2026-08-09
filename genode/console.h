@@ -58,15 +58,17 @@ class Seoul::Console : public StaticReceiver<Seoul::Console>
 		Genode::Mutex              _mutex { };
 		Genode::List<Backend_gui>  _guis  { };
 		Genode::Allocator         &_alloc;
-
 		Seoul::Guest_memory       &_memory;
-		Gui::Area  const           _gui_vesa;
-		Gui::Area                  _gui_non_vesa;
-		Gui::Area                  _gui_non_vesa_ack;
-		Gui::Area                  _input_absolute;
 
-		unsigned  _timer { 0 };
+		Gui::Area  const _gui_vesa;
+		Gui::Area        _gui_non_vesa;
+		Gui::Area        _gui_non_vesa_ack;
+		Gui::Area        _input_absolute;
+
+		uint64     const _vmm_flags;
+
 		Keyboard  _vkeyb { _mb };
+		unsigned  _timer { 0 };
 
 		int       _ox = 0, _oy = 0;
 		bool      _left        { };
@@ -116,7 +118,7 @@ class Seoul::Console : public StaticReceiver<Seoul::Console>
 		 * Constructor
 		 */
 		Console(Genode::Env &, Genode::Allocator &, Motherboard &,
-		        Gui::Area const, Seoul::Guest_memory &);
+		        Gui::Area const, Seoul::Guest_memory &, uint64);
 
 		bool apply_msg(unsigned const id, auto const & fn)
 		{

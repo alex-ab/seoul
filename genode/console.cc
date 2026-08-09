@@ -27,6 +27,7 @@
 #include <host/screen.h>
 
 /* local includes */
+#include "vmm.h"
 #include "console.h"
 
 
@@ -360,11 +361,13 @@ bool Seoul::Console::receive(MessageConsole &msg)
 
 		if (visible_vga_vesa) {
 			if (visible_others && _vga_vesa.idle()) {
-				apply_msg(ID_VGA_VESA, [&](auto &gui) {
-					Genode::log("hide vga_vesa window due to inactivity");
-					gui.hide();
-					return true;
-				});
+				if (!(_vmm_flags & CONFIG_SEOUL_NO_GUI_HEURISTIC)) {
+					apply_msg(ID_VGA_VESA, [&](auto &gui) {
+						Genode::log("hide vga_vesa window due to inactivity");
+						gui.hide();
+						return true;
+					});
+				}
 			} else {
 				/* trigger "artificial" wakeup if vga/vesa idle */
 				if (_vga_vesa.reactivate_key_pressed())
@@ -391,14 +394,16 @@ bool Seoul::Console::receive(MessageConsole &msg)
 			}
 
 			if (msg.view == 0) {
-				if (!msg.hide) {
+				if ((_vmm_flags & CONFIG_SEOUL_NO_GUI_HEURISTIC) || !msg.hide) {
 					gui.refresh(msg.x, msg.y, msg.width, msg.height);
 					return true;
 				}
 
 				if (msg.id != ID_VGA_VESA) {
-					Genode::log("gui.hide() called");
-					gui.hide();
+					if (!(_vmm_flags & CONFIG_SEOUL_NO_GUI_HEURISTIC)) {
+						Genode::log("gui.hide() called");
+						gui.hide();
+					}
 
 					/* trigger "artificial" wakeup if vga/vesa idle */
 					if (_vga_vesa.reactivate_key_pressed()) {
@@ -605,14 +610,12 @@ bool Seoul::Console::receive(MessageTimeout &msg)
 
 Seoul::Console::Console(Genode::Env &env, Genode::Allocator &alloc,
                         Motherboard &mb, Gui::Area const area,
-                        Seoul::Guest_memory &guest_memory)
+                        Seoul::Guest_memory &guest_memory,
+                        uint64 vmm_flags)
 :
-	_env(env),
-	_mb(mb),
-	_alloc(alloc),
-	_memory(guest_memory),
+	_env(env), _mb(mb), _alloc(alloc), _memory(guest_memory),
 	_gui_vesa(area), _gui_non_vesa(area), _gui_non_vesa_ack(area),
-	_input_absolute(area),
+	_input_absolute(area), _vmm_flags(vmm_flags),
 	_vga_vesa(_memory, _binary_mono_tff_start)
 {
 	mb.bus_console  .add(this, receive_static<MessageConsole>);

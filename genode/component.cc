@@ -45,6 +45,7 @@
 #include <service/time.h>
 
 /* local includes */
+#include "vmm.h"
 #include "device_model_registry.h"
 #include "boot_module_provider.h"
 #include "console.h"
@@ -199,19 +200,16 @@ class Vcpu : public StaticReceiver<Vcpu>
 		Genode::Semaphore                   _block   { 0 };
 		Genode::Semaphore                   _started { 0 };
 
+		uint64 const                        _vmm_flags;
 		bool const                          _vmx;
 		bool const                          _svm;
-		bool const                          _map_small;
-		bool const                          _rdtsc_exit;
-		bool const                          _cpuid_native;
-		bool const                          _track_exits;
 		bool                                _warned_cpuid_once { };
 
 		/* initialize after other members, vCPU gets runnable immediately */
 		Genode::Vm_connection              &_vm_con;
 		Genode::Vm_connection::Vcpu         _vm_vcpu;
 
-		bool _init_cpuid_state(bool const cpuid_native, unsigned const vcpu_id)
+		auto _init_cpuid_state(auto const flags, unsigned const vcpu_id)
 		{
 			_seoul_state.clear();
 			_seoul_state.head.cpuid = vcpu_id;
@@ -219,7 +217,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 			/* handle cpuid overrides */
 			_vcpu.executor.add(this, receive_static<CpuMessage>);
 
-			return cpuid_native;
+			return flags;
 		}
 
 	public:
@@ -234,10 +232,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 		     unsigned const          vcpu_id,
 		     bool     const          vmx,
 		     bool     const          svm,
-		     bool     const          map_small,
-		     bool     const          rdtsc,
-		     bool     const          cpuid_native,
-		     bool     const          track_exits)
+		     uint64   const          vmm_flags)
 		:
 			_handler(ep, *this, &Vcpu::_handle_vm_exception),
 //			         vmx ? &Vcpu::exit_config_intel :
@@ -245,16 +240,15 @@ class Vcpu : public StaticReceiver<Vcpu>
 			_guest_memory(guest_memory),
 			_motherboard(motherboard),
 			_vcpu(vcpu),
-			_vmx(vmx), _svm(svm), _map_small(map_small), _rdtsc_exit(rdtsc),
-			_cpuid_native(_init_cpuid_state(cpuid_native, vcpu_id)),
-			_track_exits(track_exits),
+			_vmx(vmx), _svm(svm),
+			_vmm_flags(_init_cpuid_state(vmm_flags, vcpu_id)),
 			_vm_con(vm_con),
 			_vm_vcpu(_vm_con, alloc, _handler, _exit_config)
 		{
 			if (!_svm && !_vmx)
 				Logging::panic("no SVM/VMX available, sorry");
 
-			/* note: don't initialize anything here, use _init_cpuid_native */
+			/* note: don't initialize anything here, use _init_cpuid_state */
 		}
 
 		void start()   { _started.up(); }
@@ -348,7 +342,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 
 		void track_exit_counts(auto const exit_reason)
 		{
-			if (!_track_exits)
+			if (!(_vmm_flags & CONFIG_SEOUL_TRACK_EXITS))
 				return;
 
 			if (exit_reason < sizeof(exit_reason_count) / sizeof(*exit_reason_count))
@@ -359,7 +353,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 
 		void track_io_counts(auto const &state)
 		{
-			if (!_track_exits)
+			if (!(_vmm_flags & CONFIG_SEOUL_TRACK_EXITS))
 				return;
 
 			io_count ++;
@@ -713,7 +707,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 			} else
 				state.discharge(); /* reset */
 
-			if (_map_small)
+			if (_vmm_flags & CONFIG_SEOUL_MAP_SMALL)
 				_guest_memory.attach_to_vm(_vm_con,
 				                           mem_region.page << PAGE_SIZE_LOG2,
 				                           1 << PAGE_SIZE_LOG2, !mem_region.read_only);
@@ -763,7 +757,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			Seoul::startup_workaround(state);
 
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_CHECK_IRQ);
-			state.ctrl_primary  .charge(_rdtsc_exit ? (1u << 14) : 0);
+
+			bool const rdtsc_exit = _vmm_flags & CONFIG_SEOUL_RDTSC_EXIT;
+			state.ctrl_primary  .charge(rdtsc_exit ? (1u << 14) : 0);
 			state.ctrl_secondary.charge((1u << 13) /* XSETBV */);
 		}
 
@@ -781,9 +777,11 @@ class Vcpu : public StaticReceiver<Vcpu>
 		void _svm_invalid(Genode::Vcpu_state & state)
 		{
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_SINGLE_STEP);
+
+			bool const rdtsc_exit = _vmm_flags & CONFIG_SEOUL_RDTSC_EXIT;
 			state.ctrl_primary.charge(state.ctrl_primary.value() |
 			                          (1u << 18) /* cpuid */ |
-			                          (_rdtsc_exit ? (1u << 14) : 0));
+			                          (rdtsc_exit ? (1u << 14) : 0));
 			state.ctrl_secondary.charge(state.ctrl_secondary.value() |
 			                            (1u << 0) /* vmrun */);
 		}
@@ -895,7 +893,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 			Seoul::startup_workaround(state);
 
 			handle_vcpu(state, NO_SKIP, CpuMessage::TYPE_HLT);
-			state.ctrl_primary.charge(_rdtsc_exit ? (1U << 12) : 0);
+
+			bool const rdtsc_exit = _vmm_flags & CONFIG_SEOUL_RDTSC_EXIT;
+			state.ctrl_primary.charge(rdtsc_exit ? (1U << 12) : 0);
 			state.ctrl_secondary.charge(1u << 20 /* XSAVE */);
 		}
 
@@ -963,7 +963,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 
 			auto &cpu = *msg.cpu;
 
-			if (!_cpuid_native) {
+			if (!(_vmm_flags & CONFIG_SEOUL_CPUID_NATIVE)) {
 				cpu.eax = cpu.ebx = cpu.ecx = cpu.edx = 0;
 				msg.mtr_out |= MTD_GPR_ACDB;
 				return true;
@@ -1035,22 +1035,27 @@ struct Vmm {
 
 	Genode::Number_of_bytes vmm_size { 12 * 1024 * 1024 };
 
-	bool map_small         { };
-	bool rdtsc_exit        { };
-	bool vmm_vcpu_same_cpu { };
-	bool cpuid_native      { };
-	bool memory_verbose    { };
-	bool track_exits       { };
+	uint64 vmm_flags { };
 
 	void read_config(Genode::Node const &node)
 	{
-		map_small         = node.attribute_value("map_small", map_small);
-		rdtsc_exit        = node.attribute_value("exit_on_rdtsc", rdtsc_exit);
-		vmm_vcpu_same_cpu = node.attribute_value("vmm_vcpu_same_cpu", vmm_vcpu_same_cpu);
-		cpuid_native      = node.attribute_value("cpuid_native", cpuid_native);
-		memory_verbose    = node.attribute_value("verbose_mem", memory_verbose);
-		vmm_size          = node.attribute_value("vmm_memory", vmm_size);
-		track_exits       = node.attribute_value("track_exits", track_exits);
+		bool map_small        = !!(vmm_flags & CONFIG_SEOUL_MAP_SMALL);
+		bool rdtsc_exit       = !!(vmm_flags & CONFIG_SEOUL_RDTSC_EXIT);
+		bool vcpu_same_cpu    = !!(vmm_flags & CONFIG_SEOUL_VCPU_SAME_CPU);
+		bool cpuid_native     = !!(vmm_flags & CONFIG_SEOUL_CPUID_NATIVE);
+		bool verbose_mem      = !!(vmm_flags & CONFIG_SEOUL_MEMORY_VERBOSE);
+		bool track_exits      = !!(vmm_flags & CONFIG_SEOUL_TRACK_EXITS);
+		bool no_gui_heuristic = !!(vmm_flags & CONFIG_SEOUL_NO_GUI_HEURISTIC);
+
+		if (node.attribute_value("map_small"        , map_small))        vmm_flags |= CONFIG_SEOUL_MAP_SMALL;
+		if (node.attribute_value("rdtsc_exit"       , rdtsc_exit))       vmm_flags |= CONFIG_SEOUL_RDTSC_EXIT;
+		if (node.attribute_value("vmm_vcpu_same_cpu", vcpu_same_cpu))    vmm_flags |= CONFIG_SEOUL_VCPU_SAME_CPU;
+		if (node.attribute_value("cpuid_native"     , cpuid_native))     vmm_flags |= CONFIG_SEOUL_CPUID_NATIVE;
+		if (node.attribute_value("verbose_mem"      , verbose_mem))      vmm_flags |= CONFIG_SEOUL_MEMORY_VERBOSE;
+		if (node.attribute_value("track_exits"      , track_exits))      vmm_flags |= CONFIG_SEOUL_TRACK_EXITS;
+		if (node.attribute_value("no_gui_heuristic" , no_gui_heuristic)) vmm_flags |= CONFIG_SEOUL_NO_GUI_HEURISTIC;
+
+		vmm_size = node.attribute_value("vmm_memory", vmm_size);
 	}
 
 	Vmm(Genode::Env &env) : env(env)
@@ -1242,7 +1247,7 @@ class Machine : public StaticReceiver<Machine>
 					using Genode::Affinity;
 
 					Affinity::Space space = _vmm.env.cpu().affinity_space();
-					Affinity::Location location(space.location_of_index(_vcpus_up + (_vmm.vmm_vcpu_same_cpu ? 0 : 1)));
+					Affinity::Location location(space.location_of_index(_vcpus_up + ((_vmm.vmm_flags & CONFIG_SEOUL_VCPU_SAME_CPU) ? 0 : 1)));
 
 					String<16> * ep_name = new String<16>("vCPU EP ", _vcpus_up);
 					Entrypoint * ep = new Entrypoint(_vmm.env, STACK_SIZE,
@@ -1254,9 +1259,7 @@ class Machine : public StaticReceiver<Machine>
 					auto vcpu = new Vcpu(*ep, _vmm.vm_con, _vmm.heap, _vmm.env,
 					                     *msg.vcpu, _guest_memory, _motherboard,
 					                     _vcpus_up, has_vmx, has_svm,
-					                     _vmm.map_small, _vmm.rdtsc_exit,
-					                     _vmm.cpuid_native,
-					                     _vmm.track_exits);
+					                     _vmm.vmm_flags);
 
 					_vcpus[_vcpus_up] = vcpu;
 					msg.value = _vcpus_up;
@@ -1554,7 +1557,7 @@ class Machine : public StaticReceiver<Machine>
 			_motherboard.bus_legacy.add  (this, receive_static<MessageLegacy>);
 			_motherboard.bus_audio.add   (this, receive_static<MessageAudio>);
 
-			if (!vmm.track_exits)
+			if (!(vmm.vmm_flags & CONFIG_SEOUL_TRACK_EXITS))
 				return;
 
 			/* debug */
@@ -1862,9 +1865,9 @@ void Component::construct(Genode::Env &env)
 	vm_size = vm_size & ~((1UL << PAGE_SIZE_LOG2) - 1);
 
 	Genode::log(" VMM memory ", Genode::Number_of_bytes(vmm.vmm_size));
-	Genode::log(" using ", vmm.map_small ? "small": "large",
+	Genode::log(" using ", (vmm.vmm_flags & CONFIG_SEOUL_MAP_SMALL) ? "small": "large",
 	            " memory attachments for guest VM.");
-	if (vmm.rdtsc_exit)
+	if (vmm.vmm_flags & CONFIG_SEOUL_RDTSC_EXIT)
 		Genode::log(" enabling VM exit on RDTSC.");
 
 	unsigned const width  = vmm.config.node().attribute_value("width", 1024U);
@@ -1874,7 +1877,7 @@ void Component::construct(Genode::Env &env)
 
 	/* setup guest memory */
 	static Seoul::Guest_memory guest_memory(env, vmm.heap, vmm.vm_con, vm_size,
-	                                        vmm.memory_verbose);
+	                                        vmm.vmm_flags & CONFIG_SEOUL_MEMORY_VERBOSE);
 
 	/* diagnostic messages */
 	guest_memory.dump_regions();
@@ -1898,7 +1901,8 @@ void Component::construct(Genode::Env &env)
 	static Machine machine(guest_memory, vmm);
 
 	static Seoul::Console vcon(env, vmm.heap, machine.motherboard(),
-	                           Gui::Area(width, height), guest_memory);
+	                           Gui::Area(width, height), guest_memory,
+	                           vmm.vmm_flags);
 
 	static Seoul::Disk vdisk(env, machine.motherboard(),
 	                         guest_memory.backing_store_local_base(),
@@ -1911,5 +1915,5 @@ void Component::construct(Genode::Env &env)
 
 	Genode::log("\n--- Booting VM ---");
 
-	machine.boot(vmm.cpuid_native);
+	machine.boot((vmm.vmm_flags & CONFIG_SEOUL_CPUID_NATIVE));
 }
