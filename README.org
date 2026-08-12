@@ -6,9 +6,13 @@ that is included in [[https://github.com/TUD-OS/NUL][NUL]] and was developed
 mainly by Bernhard Kauer. The combination of NOVA and Vancouver (later
 Seoul) is described in the following paper by Udo Steinberg and Bernhard Kauer:
 
-[[http://os.inf.tu-dresden.de/papers_ps/steinberg_eurosys2010.pdf][NOVA: A Microhypervisor-Based Secure Virtualization Architecture]]
+[[https://os.inf.tu-dresden.de/papers_ps/steinberg_eurosys2010.pdf][NOVA: A Microhypervisor-Based Secure Virtualization Architecture]]
 
-NUL and the Vancouver project is discontinued. Even so Seoul has beend
+Additionally, Vancouver is described as part of the dissertation of Bernhard Kauer:
+
+[[https://www.researchgate.net/publication/275031217_Improving_System_Security_Through_TCB_Reduction][Improving System Security Through TCB Reduction]]
+
+NUL and the Vancouver project is discontinued. Even so Seoul has been
 developed originally solely to run with the NOVA hypervisor, nowadays it is
 also available for seL4 and Fiasco.OC on Genode.
 
@@ -31,8 +35,8 @@ Beside keeping it runnable, the noteworthy extensions are
 the [[https://genode.org/documentation/release-notes/23.11#Seoul_virtual_machine_monitor][64 bit guest support]]
 added in 2023 and the support of
 [[https://genode.org/documentation/release-notes/22.11#Seoul_VMM][Virtio]]
-models for GPU(2D), audio and input in 2021-2022.
-From time to time I [[https://www.genodians.org/alex-ab/index][publish]]
+models for GPU(2D), audio and input in 2021-2022. In 2024 [[https://genode.org/documentation/release-notes/24.05#Seoul_virtual_machine_monitor][USB support]] got added.
+In 2026 virtio filesystem support got added. From time to time I [[https://www.genodians.org/alex-ab/index][publish]]
 on [[https://www.genodians.org][genodians.org]] updates.
 
 * Developing Seoul with Genode OS framework
@@ -67,3 +71,54 @@ example invocation is
 ! make -C build/x86_64 KERNEL=nova run/seoul-auto
 
 For questions please consult github issue tracker of this repository.
+
+* Further resources
+
+List of resources about or mentioning Vancouver respectively Seoul VMM in chronological order:
+
+2025.09 - seL4 summit - [[https://sel4.systems/Summit/2025/abstracts2025.html#a-sculpt-os][Sculpt OS - a dynamic general-purpose OS powered by Genode on seL4]]
+
+2025.02 - Fosdem 2025 - [[https://archive.fosdem.org/2025/schedule/event/fosdem-2025-5768-celebrating-kernel-diversity-with-genode][Celebrating kernel diversity with Genode]] - (check out pdf presentation)
+
+2024.08 - Genode release - [[https://genode.org/documentation/release-notes/24.08#NOVA_microhypervisor][24.08 - AVX suport]]
+
+2024.05 - Genode release - [[https://genode.org/documentation/release-notes/24.05#Seoul_virtual_machine_monitor][24.05 - USB support]]
+
+2024.02 - Genode release - [[https://genode.org/documentation/release-notes/24.02#Seoul_VMM][24.02]]
+
+2023.11 - Genode release - [[https://genode.org/documentation/release-notes/23.11#Seoul_virtual_machine_monitor][23.11 - 64bit VM support]]
+
+2022.11 - Genode release - [[https://genode.org/documentation/release-notes/22.11#Seoul_VMM][22.11 - First virtio models]]
+
+2020.02 - Genode release - [[https://genode.org/documentation/release-notes/20.02#Seoul_VMM][20.02]]
+
+2019.08 - Genode release - [[https://genode.org/documentation/release-notes/19.08#Virtualization][19.08]]
+
+2019.05 - Genodians article - [[https://genodians.org/alex-ab/2019-05-09-seoul-vmm][Seoul VMM and the new VM interface]]
+
+2019.05 - Genode release - [[https://genode.org/documentation/release-notes/19.05#Seoul_and_VirtualBox_virtual_machine_monitors][19.05]]
+
+2019.02 - Fosdem 2019 - [[https://archive.fosdem.org/2019/schedule/event/microkernel_virtualization][Microkernel virtualization under one roof - Dare the impossible]]
+
+2018.05 - Genode release - [[https://genode.org/documentation/release-notes/18.05#Seoul_VMM_on_NOVA][18.05]]
+
+2015.11 - Genode release - [[https://genode.org/documentation/release-notes/15.11#Seoul_VMM][15.11]]
+
+2014.11 - Genode release - [[https://genode.org/documentation/release-notes/14.11#Updated_Seoul_virtual_machine_monitor][14.11]]
+
+2014.08 - Genode release - [[https://genode.org/documentation/release-notes/14.08#SMP_for_the_Seoul_virtual-machine_monitor][14.08 - SMP for the Seoul VMM]]
+
+2014.02 - Genode release - [[https://genode.org/documentation/release-notes/14.02][14.02]]
+
+2013.11 - Genode release - [[https://genode.org/documentation/release-notes/13.11#Virtualization_on_NOVA][13.11]]
+
+2013.08 - Genode release - [[https://genode.org/documentation/release-notes/13.08#Seoul__aka_Vancouver__VMM_on_NOVA][13.08]]
+
+2013.05 - Genode release - [[https://genode.org/documentation/release-notes/13.05#Vancouver_VMM_on_NOVA][13.05]]
+
+2013.02 - Genode release - [[https://genode.org/documentation/release-notes/13.02#Full_virtualization_on_NOVA_x86][13.02 - Full virtualization on NOVA/x86]]
+
+2012.08 - Genode release - [[https://genode.org/documentation/release-notes/12.08#Vancouver][12.08]]
+
+2011.11 - Genode release - [[https://genode.org/documentation/release-notes/11.11#Faithful_x86_PC_Virtualization_enabled_by_the_Vancouver_VMM][11.11 - Faithful x86 PC Virtualization enabled by the Vancouver VMM]]
+
