@@ -60,6 +60,10 @@
 #include "file.h"
 
 
+#include <nova/syscalls.h>
+#include <nova/syscall-generic.h>
+
+
 enum { verbose_debug = false };
 enum { verbose_npt   = false };
 enum { verbose_io    = false };
@@ -188,8 +192,12 @@ class Vcpu : public StaticReceiver<Vcpu>
 
 	private:
 
+		struct Exit_config : Genode::Vm_connection::Exit_config {
+			bool (*config_exit) (Genode::Vcpu_state &, unsigned exit) { };
+		};
+
 		Genode::Vcpu_handler<Vcpu>          _handler;
-		Genode::Vm_connection::Exit_config  _exit_config { };
+		Exit_config                         _exit_config { };
 
 		Seoul::Guest_memory                &_guest_memory;
 		Motherboard                        &_motherboard;
@@ -220,6 +228,19 @@ class Vcpu : public StaticReceiver<Vcpu>
 			return flags;
 		}
 
+		Genode::Vm_connection::Exit_config & exit_config(bool vmx, bool svm)
+		{
+			if (vmx)
+				_exit_config.config_exit = Vcpu::exit_config_intel;
+			else if (svm)
+				_exit_config.config_exit = Vcpu::exit_config_amd;
+
+			if (_vmm_flags & CONFIG_SEOUL_USE_NOVA_RECALL)
+				__builtin_memcpy(&_exit_config, &_exit_config.config_exit, sizeof(_exit_config.config_exit));
+
+			return _exit_config;
+		}
+
 	public:
 
 		Vcpu(Genode::Entrypoint    & ep,
@@ -235,15 +256,13 @@ class Vcpu : public StaticReceiver<Vcpu>
 		     uint64   const          vmm_flags)
 		:
 			_handler(ep, *this, &Vcpu::_handle_vm_exception),
-//			         vmx ? &Vcpu::exit_config_intel :
-//			         svm ? &Vcpu::exit_config_amd : nullptr),
 			_guest_memory(guest_memory),
 			_motherboard(motherboard),
 			_vcpu(vcpu),
 			_vmx(vmx), _svm(svm),
 			_vmm_flags(_init_cpuid_state(vmm_flags, vcpu_id)),
 			_vm_con(vm_con),
-			_vm_vcpu(_vm_con, alloc, _handler, _exit_config)
+			_vm_vcpu(_vm_con, alloc, _handler, exit_config(vmx, svm))
 		{
 			if (!_svm && !_vmx)
 				Logging::panic("no SVM/VMX available, sorry");
@@ -256,7 +275,26 @@ class Vcpu : public StaticReceiver<Vcpu>
 		void unblock() { _block.up(); }
 		void off()     { _seoul_state.head.cpuid = ~0U; recall(); }
 
-		void recall() { _handler.local_submit(); }
+		void recall()
+		{
+			if (_vmm_flags & CONFIG_SEOUL_USE_NOVA_RECALL)
+				recall_nova();
+			else
+				_handler.local_submit();
+		}
+
+		mword _sm_sel() const { return Nova::NUM_INITIAL_PT_RESERVED +
+		                               _seoul_state.head.cpuid * 4; }
+
+		mword _ec_sel() const { return _sm_sel() + 1; }
+
+		void recall_nova()
+		{
+			auto res = Nova::ec_ctrl(Nova::EC_RECALL, _ec_sel());
+			if (res != Nova::NOVA_OK)
+				Genode::error("res=", res, " cpuid=", _seoul_state.head.cpuid,
+				              " _ec_sel=", _ec_sel());
+		}
 
 		void show_host_cpu_info()
 		{
@@ -476,7 +514,7 @@ class Vcpu : public StaticReceiver<Vcpu>
 			});
 		}
 
-		void exit_config_intel(Genode::Vcpu_state &state, unsigned exit)
+		static bool exit_config_intel(Genode::Vcpu_state &state, unsigned exit)
 		{
 			CpuState dummy_state;
 			unsigned mtd = 0;
@@ -521,6 +559,10 @@ class Vcpu : public StaticReceiver<Vcpu>
 				/* 64bit guests */
 				mtd |= MTD_FS_GS | MTD_EFER | MTD_SYSCALL_SWAPGS;
 				mtd |= MTD_INJ | MTD_RFLAGS;
+				mtd |= MTD_XSAVE;
+				break;
+			case 0x37:
+				mtd |= MTD_RIP_LEN | MTD_GPR_ACDB;
 				break;
 			case 0x21: /* _vmx_invalid */
 			case 0x30: /* _vmx_ept */
@@ -536,9 +578,11 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			Seoul::write_vcpu_state(dummy_state, mtd, state);
+
+			return true;
 		}
 
-		void exit_config_amd(Genode::Vcpu_state &state, unsigned exit)
+		static bool exit_config_amd(Genode::Vcpu_state &state, unsigned exit)
 		{
 			CpuState dummy_state;
 			unsigned mtd = 0;
@@ -568,6 +612,9 @@ class Vcpu : public StaticReceiver<Vcpu>
 				mtd = MTD_RIP_LEN | MTD_QUAL | MTD_GPR_ACDB | MTD_GPR_BSD |
 				      MTD_STATE | MTD_RFLAGS;
 				break;
+			case 0x8d:
+				mtd = MTD_RIP_LEN | MTD_GPR_ACDB;
+				break;
 			case 0x7c: /* _svm_msr, MTD_ALL */
 			case 0x7f: /* _triple, MTD_ALL */
 			case 0xfd: /* _svm_invalid, MTD_ALL */
@@ -581,6 +628,8 @@ class Vcpu : public StaticReceiver<Vcpu>
 			}
 
 			Seoul::write_vcpu_state(dummy_state, mtd, state);
+
+			return true;
 		}
 
 		/***********************************
@@ -1072,6 +1121,9 @@ struct Vmm {
 		info.node().with_optional_sub_node("kernel", [&](auto const &node) {
 			kernel = node.attribute_value("name", kernel); });
 
+		if (kernel == "nova" && node_c.attribute_value("use_nova_recall", sizeof(Genode::Vm_connection::Exit_config) >= sizeof(void *)))
+			vmm_flags |= CONFIG_SEOUL_USE_NOVA_RECALL;
+
 		if (kernel == "unknown")
 			return;
 
@@ -1264,8 +1316,9 @@ class Machine : public StaticReceiver<Machine>
 					_vcpus[_vcpus_up] = vcpu;
 					msg.value = _vcpus_up;
 
-					Logging::printf("create vcpu %u affinity %u:%u\n",
-					                _vcpus_up, location.xpos(), location.ypos());
+					Genode::log("create vcpu ", _vcpus_up, " affinity ",
+					            location.xpos(), ":", location.ypos(),
+					            (_vmm.vmm_flags & CONFIG_SEOUL_USE_NOVA_RECALL) ? " +recall" : "");
 
 					_vcpus_up ++;
 
