@@ -174,13 +174,13 @@ private:
 				MessageHostOp msg(MessageHostOp::OP_ALLOC_IOIO_REGION, (barinfo.port << 8) |  Cpu::bsr(size | 0x3));
 				_mb.bus_hostop.send(msg);
 
-				Logging::printf("------- io port\n");
+				Logging::printf("------- bar=%u io port barinfo.port=%x barinfo.base=%llx+%lx\n", i, barinfo.port, barinfo.base, barinfo.size);
 			} else {
 				barinfo.io  = false;
 
 				MessageHostOp msg(MessageHostOp::OP_ALLOC_IOMEM, base & ~0x1f, 1 << Cpu::bsr(((size - 1) | 0xfff) + 1));
 
-				Logging::printf("------- io mem %lx-%x\n",
+				Logging::printf("------- bar=%u io mem %lx-%x\n", i,
 				                base & ~0x1f,
 				                1 << Cpu::bsr(((size - 1) | 0xfff) + 1));
 
@@ -206,6 +206,8 @@ private:
     if (~_cfgspace[1] & 1) return false;
 
     for (unsigned i = 0; i < _bar_count; i++) {
+      if (port >= 0x1000 && port != 0x8000 && _barinfo[i].io)
+        Logging::printf("%u %x ?-> %x (port=%x)\n", i, port, _cfgspace[BAR0 + i], _barinfo[i].port);
       if (!_barinfo[i].io || !in_range(port, _cfgspace[BAR0 + i] & BAR_IO_MASK, _barinfo[i].size - size + 1))
         continue;
 
@@ -298,7 +300,7 @@ private:
 			return true;
 		}
 
-		Logging::printf("pcidirect pci config write\n");
+		Logging::printf("pcidirect pci config write %x==%x before msg.value=%x\n", msg.dword, _cfgspace[msg.dword], msg.value);
 
 		// WRITE
 		unsigned mask = !msg.dword ? 0u : ~0u;
@@ -314,12 +316,18 @@ private:
 		}
 
 		if (~mask)
+			Logging::printf("pcidirect pci config write A %x | %x \n",
+			                _cfgspace[msg.dword] & ~mask,
+			                (msg.value & mask));
+		if (~mask)
 			_cfgspace[msg.dword] = (_cfgspace[msg.dword] & ~mask) | (msg.value & mask);
 		else {
 			//write through
 			conf_write(_hostbdf, msg.dword, msg.value);
 			_cfgspace[msg.dword] = conf_read(_hostbdf, msg.dword);
 		}
+
+		Logging::printf("pcidirect pci config write %x==%x after mask=%x\n", msg.dword, _cfgspace[msg.dword], mask);
 
 		return true;
 	}
